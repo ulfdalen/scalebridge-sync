@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>scalebridge-sync</title>
+<link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <a class="brand" href="/">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M2 14h20"/><path d="M4.5 14v6.5"/><path d="M19.5 14v6.5"/>
+      <path d="M4.5 20.5a7.5 6 0 0 1 15 0"/><rect x="8.5" y="8" width="7" height="6" rx="1.6"/>
+    </svg>
+    <span>
+      <span class="brand-name">scalebridge-sync</span>
+      <span class="brand-sub">Withings → Garmin</span>
+    </span>
+  </a>
+  <span class="grow"></span>
+  <a class="navlink active" href="/">Dashboard</a>
+  <a class="navlink" href="/settings">Settings</a>
+</header>
+
+<noscript>
+  <div class="noscript">
+    <strong>This app needs JavaScript.</strong><br>
+    The dashboard is built in the browser. Enable JavaScript for this page (it is
+    served from your own computer) and reload.
+  </div>
+</noscript>
+
+<main class="page stack hidden" id="app">
+
+  <div id="banners" class="stack-sm"></div>
+
+  <!-- connections -->
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-body stack-sm">
+        <div class="conn-head">
+          <span class="conn-logo withings">W</span>
+          <span class="grow">
+            <span class="title">Withings</span>
+            <span class="conn-ident" id="withings-ident">Checking…</span>
+          </span>
+          <span id="withings-pill"></span>
+        </div>
+        <div class="row row-wrap" id="withings-actions"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body stack-sm">
+        <div class="conn-head">
+          <span class="conn-logo garmin">G</span>
+          <span class="grow">
+            <span class="title">Garmin Connect</span>
+            <span class="conn-ident" id="garmin-ident">Checking…</span>
+          </span>
+          <span id="garmin-pill"></span>
+        </div>
+        <div class="row row-wrap" id="garmin-actions"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- sync -->
+  <div class="card">
+    <div class="card-head">
+      <span class="title grow">Sync</span>
+      <span id="sync-pill"></span>
+    </div>
+    <div class="card-body stack-sm">
+      <dl class="kv-list">
+        <div class="kv"><dt>Last sync</dt><dd id="sync-last">—</dd></div>
+        <div class="kv"><dt>Result</dt><dd id="sync-result">—</dd></div>
+        <div class="kv"><dt>Next run</dt><dd id="sync-next">—</dd></div>
+        <div class="kv"><dt>Checks every</dt><dd id="sync-interval">—</dd></div>
+      </dl>
+      <div id="backfill-block" class="stack-xs hidden">
+        <div class="caption" id="backfill-label"></div>
+        <div class="progress"><div class="progress-fill" id="backfill-fill"></div></div>
+      </div>
+    </div>
+    <div class="card-foot row row-wrap">
+      <button class="btn btn-accent btn-sm" type="button" id="sync-now">Sync now</button>
+      <span class="caption grow" id="sync-note"></span>
+    </div>
+  </div>
+
+  <!-- measurements -->
+  <div class="card">
+    <div class="card-head">
+      <span class="title grow">Recent measurements</span>
+      <span class="caption" id="measurements-count"></span>
+    </div>
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Weight</th>
+            <th class="col-tertiary">Body fat</th>
+            <th class="col-secondary">Muscle</th>
+            <th>Synced</th>
+          </tr>
+        </thead>
+        <tbody id="measurements-body"></tbody>
+      </table>
+    </div>
+    <div class="empty hidden" id="measurements-empty">
+      No measurements yet — step on your scale, then Sync now.
+    </div>
+  </div>
+
+  <!-- event log -->
+  <div class="card">
+    <div class="card-head">
+      <span class="title grow">Activity</span>
+      <button class="btn btn-ghost btn-sm" type="button" id="log-more">Show more</button>
+    </div>
+    <ul class="log" id="log-list"></ul>
+    <div class="empty hidden" id="log-empty">Nothing has happened yet.</div>
+  </div>
+
+</main>
+
+<footer class="foot">
+  <span id="version">scalebridge-sync</span>
+  <span id="update-pill"></span>
+  <span class="grow"></span>
+  <span id="config-note">Settings and tokens live in this app's config file, on this computer.</span>
+  <a href="https://scalebridge.ulf.su" target="_blank" rel="noopener noreferrer">Hosted version</a>
+  <a href="https://github.com/ulfdalen/scalebridge-sync" target="_blank" rel="noopener noreferrer">GitHub</a>
+</footer>
+
+<script src="/static/ui.js" defer></script>
+<script src="/static/garmin-connect.js" defer></script>
+<script src="/static/withings-connect.js" defer></script>
+<script src="/static/dashboard.js" defer></script>
+</body>
+</html>

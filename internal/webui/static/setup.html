@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Set up · scalebridge-sync</title>
+<link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<header class="wz-header">
+  <span class="brand">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M2 14h20"/><path d="M4.5 14v6.5"/><path d="M19.5 14v6.5"/>
+      <path d="M4.5 20.5a7.5 6 0 0 1 15 0"/><rect x="8.5" y="8" width="7" height="6" rx="1.6"/>
+    </svg>
+    <span>
+      <span class="brand-name">scalebridge-sync</span>
+      <span class="brand-sub">setup</span>
+    </span>
+  </span>
+</header>
+
+<noscript>
+  <div class="noscript">
+    <strong>This app needs JavaScript.</strong><br>
+    The setup wizard and the dashboard are built in the browser. Enable JavaScript
+    for this page (it is served from your own computer) and reload.
+  </div>
+</noscript>
+
+<main class="wz-layout hidden" id="wizard">
+  <nav aria-label="Setup progress">
+    <ol class="rail" id="rail">
+      <li data-step="1"><span class="rail-mark">1</span><span class="rail-text">Welcome</span></li>
+      <li data-step="2"><span class="rail-mark">2</span><span class="rail-text">Withings app</span></li>
+      <li data-step="3"><span class="rail-mark">3</span><span class="rail-text">Authorize</span></li>
+      <li data-step="4"><span class="rail-mark">4</span><span class="rail-text">Garmin</span></li>
+      <li data-step="5"><span class="rail-mark">5</span><span class="rail-text">History</span></li>
+      <li data-step="6"><span class="rail-mark">6</span><span class="rail-text">Schedule</span></li>
+    </ol>
+  </nav>
+
+  <div>
+
+  <!-- 1. Welcome -->
+  <section class="wz-step" id="step-1">
+    <h1 class="display-1 wz-title">Let's get your scale talking to Garmin</h1>
+    <p class="body wz-lede">
+      This app watches your Withings account for new measurements and copies them into
+      Garmin Connect on a schedule. Setup takes about five minutes, most of it spent in
+      the Withings developer portal — which is the part everyone gets stuck on, so we walk
+      you through every field.
+    </p>
+
+    <div class="banner banner-info">
+      <div>
+        <strong>Everything runs and stays on this computer.</strong><br>
+        No cloud, no account, no telemetry. Your measurements go from Withings to this
+        machine to Garmin, and nowhere else. The only things ever written to disk are your
+        settings and the access tokens needed to talk to those two services.
+      </div>
+    </div>
+
+    <div class="card card-pad stack-sm">
+      <div class="title">What you'll need</div>
+      <ul class="checklist">
+        <li><span class="ck"></span><span>Your <strong>Withings</strong> account — the same one your scale already reports to.</span></li>
+        <li><span class="ck"></span><span>Your <strong>Garmin Connect</strong> email and password (and your phone or inbox, if Garmin asks for a code).</span></li>
+        <li><span class="ck"></span><span>About <strong>five minutes</strong>, and this computer left on afterwards so the sync can run.</span></li>
+      </ul>
+    </div>
+
+    <div class="card card-pad stack-sm">
+      <div class="title">One slightly odd part, up front</div>
+      <p class="body-sm">
+        In the next step you'll create your own free <strong>Withings developer application</strong>.
+        That sounds heavier than it is: it is a web form with about five fields, it costs
+        nothing, and no human reviews it.
+      </p>
+      <p class="body-sm">
+        Your application is yours alone: your data flows directly between Withings, this
+        computer and Garmin — it never passes through anyone else's server.
+      </p>
+    </div>
+
+    <p class="caption">
+      Rather not run anything yourself? The hosted version at
+      <a href="https://scalebridge.ulf.su" target="_blank" rel="noopener noreferrer">scalebridge.ulf.su</a>
+      does all of this in the cloud — connect once and forget it exists.
+    </p>
+
+    <div class="wz-actions">
+      <button class="btn btn-accent btn-lg" type="button" data-goto="2">Start setup</button>
+    </div>
+  </section>
+
+  <!-- 2. Withings app guide -->
+  <section class="wz-step" id="step-2">
+    <h1 class="display-2 wz-title">Create your Withings application</h1>
+    <p class="body wz-lede">
+      Five short sub-steps. Work through them with the Withings portal open in another
+      tab — the panels below are sketches of what you should be looking at, not screenshots,
+      so treat them as a map rather than a photograph.
+    </p>
+
+    <div class="acc" id="acc">
+
+      <!-- 2a -->
+      <div class="acc-item" data-sub="a">
+        <button class="acc-head" type="button">
+          <span class="acc-num">a</span>
+          <span class="acc-label">Sign in at developer.withings.com</span>
+          <svg class="acc-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+        </button>
+        <div class="acc-panel">
+          <p class="body-sm">
+            Open the Withings developer portal and sign in. <strong>Use your normal Withings
+            account — the same one your scale uses.</strong> There is no separate developer
+            password and no application to fill in for the account itself; signing in is all
+            it takes.
+          </p>
+          <div class="mock">
+            <div class="mock-bar"><span class="mock-dots"><i></i><i></i><i></i></span><span class="mock-url">developer.withings.com</span></div>
+            <div class="mock-screen">
+              <div class="mock-h">Sign in</div>
+              <div class="mock-sub">Withings Developer</div>
+              <div class="mock-form">
+                <div class="mock-field hl"><span class="mf-label">Email</span><span class="mf-box">the account your scale uses</span></div>
+                <div class="mock-field"><span class="mf-label">Password</span><span class="mf-box">••••••••••</span></div>
+                <span class="mock-btn primary">Sign in</span>
+              </div>
+            </div>
+            <div class="mock-caption">A sketch, not a screenshot — wording may vary.</div>
+          </div>
+          <div class="row row-wrap">
+            <a class="btn btn-secondary btn-sm" href="https://developer.withings.com/" target="_blank" rel="noopener noreferrer">Open the developer portal</a>
+            <button class="btn btn-accent btn-sm" type="button" data-sub-next="b">I'm signed in</button>
+          </div>
+          <details class="disclose">
+            <summary>Something looks different?</summary>
+            <div class="disclose-body">
+              The goal of this sub-step is only this: be signed in to
+              developer.withings.com with the same Withings account your scale reports to.
+              If you land on a page that offers you a dashboard, a list of applications, or
+              a "create an application" button, you are in the right place — carry on.
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- 2b -->
+      <div class="acc-item" data-sub="b">
+        <button class="acc-head" type="button">
+          <span class="acc-num">b</span>
+          <span class="acc-label">Create an application</span>
+          <svg class="acc-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+        </button>
+        <div class="acc-panel">
+          <p class="body-sm">
+            From the dashboard, start a new application. Withings asks a handful of
+            questions — a name, a description, a contact address, sometimes a company or a
+            logo. <strong>None of it is shown to anyone but you</strong>, and no human
+            reviews it, so plain and honest answers are fine.
+          </p>
+          <div class="stack-xs">
+            <span class="label">Suggested name</span>
+            <div id="copy-app-name"></div>
+          </div>
+          <div class="stack-xs">
+            <span class="label">Suggested description</span>
+            <div id="copy-app-desc"></div>
+          </div>
+          <div class="mock">
+            <div class="mock-bar"><span class="mock-dots"><i></i><i></i><i></i></span><span class="mock-url">developer.withings.com/dashboard</span></div>
+            <div class="mock-screen">
+              <div class="mock-h">Create an application</div>
+              <div class="mock-sub">Public API integration</div>
+              <div class="mock-form">
+                <div class="mock-field hl"><span class="mf-label">Application name</span><span class="mf-box">ScaleBridge Sync (personal)</span></div>
+                <div class="mock-field"><span class="mf-label">Description</span><span class="mf-box tall">Personal sync of my own measurements…</span></div>
+                <div class="mock-field"><span class="mf-label">Contact email</span><span class="mf-box">you@example.com</span></div>
+                <span class="mock-btn primary">Create</span>
+              </div>
+              <div class="mock-note">If it asks what kind of integration this is, choose the plain public API option.</div>
+            </div>
+            <div class="mock-caption">A sketch, not a screenshot — wording may vary.</div>
+          </div>
+          <div class="row row-wrap">
+            <a class="btn btn-secondary btn-sm" href="https://developer.withings.com/dashboard/" target="_blank" rel="noopener noreferrer">Open the dashboard</a>
+            <button class="btn btn-accent btn-sm" type="button" data-sub-next="c">Application created</button>
+          </div>
+          <details class="disclose">
+            <summary>Something looks different?</summary>
+            <div class="disclose-body">
+              The goal is to end up on a form that will hand you a <em>Client ID</em> and a
+              <em>Client Secret</em> when you finish it. Every field except the callback URL
+              in the next sub-step is cosmetic. If the portal offers several application
+              types, pick the ordinary public API one — not a partner, enterprise or
+              hardware programme.
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- 2c -->
+      <div class="acc-item" data-sub="c">
+        <button class="acc-head" type="button">
+          <span class="acc-num">c</span>
+          <span class="acc-label">The callback URL — the one that matters</span>
+          <svg class="acc-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+        </button>
+        <div class="acc-panel">
+          <div class="eyebrow">Get this exactly right</div>
+          <p class="body-sm">
+            Somewhere on the application form there is a field called <strong>Callback URI</strong>
+            (sometimes "Redirect URL"). It tells Withings where to send you after you approve
+            access. It must be this address, character for character:
+          </p>
+          <div id="copy-callback"></div>
+          <ul class="checklist">
+            <li><span class="ck"></span><span><code>http</code>, not <code>https</code> — this address is on your own machine, so there is no certificate.</span></li>
+            <li><span class="ck"></span><span><code>localhost</code>, not <code>127.0.0.1</code> — Withings treats them as different strings.</span></li>
+            <li><span class="ck"></span><span>It includes the port, <code id="cb-port">:8723</code>. Dropping it is the second most common mistake.</span></li>
+            <li><span class="ck"></span><span>It ends in <code>/callback</code>.</span></li>
+            <li><span class="ck"></span><span>No trailing slash after <code>callback</code>.</span></li>
+            <li><span class="ck"></span><span><strong>Paste it — don't type it.</strong> One transposed character and Withings will refuse to send you back.</span></li>
+          </ul>
+          <div class="mock">
+            <div class="mock-bar"><span class="mock-dots"><i></i><i></i><i></i></span><span class="mock-url">developer.withings.com/dashboard</span></div>
+            <div class="mock-screen">
+              <div class="mock-h">Application settings</div>
+              <div class="mock-sub">Callback / redirect</div>
+              <div class="mock-form">
+                <div class="mock-field"><span class="mf-label">Application name</span><span class="mf-box">ScaleBridge Sync (personal)</span></div>
+                <div class="mock-field hl"><span class="mf-label">Callback URI</span><span class="mf-box" id="mock-callback">http://localhost:8723/callback</span></div>
+                <span class="mock-btn primary">Save</span>
+              </div>
+            </div>
+            <div class="mock-caption">A sketch, not a screenshot — wording may vary.</div>
+          </div>
+          <div class="banner banner-amber">
+            <div>
+              This is the single most common thing to get wrong, and Withings' error message
+              for it is not friendly. If a later step says the redirect URL doesn't match,
+              come straight back here and compare the two strings one character at a time.
+            </div>
+          </div>
+          <div class="row row-wrap">
+            <button class="btn btn-accent btn-sm" type="button" data-sub-next="d">Callback URL saved</button>
+          </div>
+          <details class="disclose">
+            <summary>Something looks different?</summary>
+            <div class="disclose-body">
+              The goal is that Withings knows one exact address to redirect a browser to
+              after you approve access, and that address is this app on this computer. Any
+              field that talks about a callback, a redirect, a return URL or a registered
+              URI is the one. If the portal accepts several, this can be the only one in
+              the list — extra entries do no harm, a missing or mistyped one breaks
+              everything.
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- 2d -->
+      <div class="acc-item" data-sub="d">
+        <button class="acc-head" type="button">
+          <span class="acc-num">d</span>
+          <span class="acc-label">Copy the Client ID and Client Secret</span>
+          <svg class="acc-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+        </button>
+        <div class="acc-panel">
+          <p class="body-sm">
+            Once the application exists, the portal shows two long strings. Copy them across
+            one at a time — they are easy to mix up, and a stray space on either end will
+            make Withings reject the whole exchange later.
+          </p>
+          <div class="mock">
+            <div class="mock-bar"><span class="mock-dots"><i></i><i></i><i></i></span><span class="mock-url">developer.withings.com/dashboard</span></div>
+            <div class="mock-screen">
+              <div class="mock-h">ScaleBridge Sync (personal)</div>
+              <div class="mock-sub">Credentials</div>
+              <div class="mock-list">
+                <div class="mock-row hl"><span class="mr-key"></span>Client ID<span class="mr-val">a1b2c3d4…</span></div>
+                <div class="mock-row hl"><span class="mr-key"></span>Client Secret<span class="mr-val">••••••••••</span></div>
+                <div class="mock-row"><span class="mr-key"></span>Callback URI<span class="mr-val">localhost:8723</span></div>
+              </div>
+            </div>
+            <div class="mock-caption">A sketch, not a screenshot — wording may vary.</div>
+          </div>
+          <div id="creds-mount"></div>
+          <p class="caption">
+            The secret is stored on this computer only, in the app's own config file, and is
+            never sent anywhere except to Withings. This page can never read it back — once
+            saved, it is write-only.
+          </p>
+          <details class="disclose">
+            <summary>Something looks different?</summary>
+            <div class="disclose-body">
+              The goal is a matched pair of strings that prove to Withings that requests are
+              coming from your application. They may be labelled Client ID / Client Secret,
+              Consumer Key / Consumer Secret, or API key and API secret. Both are normally 64
+              lowercase letters and digits. If the secret is only shown once behind a "reveal"
+              button, copy it now — regenerating it is possible but means coming back here.
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- 2e -->
+      <div class="acc-item" data-sub="e">
+        <button class="acc-head" type="button">
+          <span class="acc-num">e</span>
+          <span class="acc-label">That's the hard part done</span>
+          <svg class="acc-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+        </button>
+        <div class="acc-panel">
+          <p class="body-sm">
+            Everything from here is ordinary sign-in screens. Next you'll approve this app's
+            access to your own measurements — that happens on Withings' own site, in a new
+            tab, and this page will notice when it is done.
+          </p>
+          <div class="row row-wrap">
+            <button class="btn btn-accent" type="button" data-goto="3">Continue to Withings</button>
+          </div>
+          <details class="disclose">
+            <summary>Something looks different?</summary>
+            <div class="disclose-body">
+              If any sub-step above is still unfinished, go back to it now. The next step
+              cannot work until the callback URL is registered and the credentials are saved.
+            </div>
+          </details>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="wz-actions">
+      <button class="btn btn-ghost" type="button" data-goto="1">Back</button>
+    </div>
+  </section>
+
+  <!-- 3. Withings authorize -->
+  <section class="wz-step" id="step-3">
+    <h1 class="display-2 wz-title">Let this app read your measurements</h1>
+    <p class="body wz-lede">
+      Now Withings asks <em>you</em> whether your own application may see your data. The
+      consent page opens in a new tab. Approve it there, then come back here — this page
+      checks every couple of seconds and moves on by itself.
+    </p>
+    <div id="withings-mount"></div>
+    <div class="wz-actions">
+      <button class="btn btn-ghost" type="button" data-goto="2">Back to the portal guide</button>
+    </div>
+  </section>
+
+  <!-- 4. Garmin -->
+  <section class="wz-step" id="step-4">
+    <h1 class="display-2 wz-title">Sign in to Garmin Connect</h1>
+    <p class="body wz-lede">
+      Garmin has no developer portal for this, so the app signs in the same way their mobile
+      app does. If your account has two-factor authentication turned on, Garmin will send a
+      six-digit code and we'll ask for it next.
+    </p>
+    <div class="card card-pad" id="garmin-mount"></div>
+    <div class="wz-actions">
+      <button class="btn btn-ghost" type="button" data-goto="3">Back</button>
+    </div>
+  </section>
+
+  <!-- 5. Backfill -->
+  <section class="wz-step" id="step-5">
+    <h1 class="display-2 wz-title">How much history should we bring over?</h1>
+    <p class="body wz-lede">
+      Old measurements are uploaded in batches after setup finishes. Anything Garmin already
+      has is skipped, and you can re-run this later from Settings — so there is no wrong
+      answer here, only a slower one.
+    </p>
+
+    <form class="radio-cards" id="backfill-form">
+      <label class="radio-card">
+        <input type="radio" name="backfill" value="none">
+        <span>
+          <span class="rc-title">Nothing</span>
+          <span class="rc-sub">Start clean. Only measurements taken from now on are synced.</span>
+        </span>
+      </label>
+      <label class="radio-card">
+        <input type="radio" name="backfill" value="30d" checked>
+        <span>
+          <span class="rc-title">Last 30 days <span class="pill pill-violet">Recommended</span></span>
+          <span class="rc-sub">A month of history. Finishes in seconds and covers the gap since you last looked.</span>
+        </span>
+      </label>
+      <label class="radio-card">
+        <input type="radio" name="backfill" value="1y">
+        <span>
+          <span class="rc-title">Last year</span>
+          <span class="rc-sub">Enough for a year-on-year chart. Usually a minute or two of uploading.</span>
+        </span>
+      </label>
+      <label class="radio-card">
+        <input type="radio" name="backfill" value="all">
+        <span>
+          <span class="rc-title">Everything</span>
+          <span class="rc-sub">Your whole Withings history. On a long history this can take a while, and it runs in the background.</span>
+        </span>
+      </label>
+    </form>
+
+    <div class="wz-actions">
+      <button class="btn btn-accent btn-lg" type="button" id="backfill-next">Continue</button>
+      <button class="btn btn-ghost" type="button" data-goto="4">Back</button>
+    </div>
+  </section>
+
+  <!-- 6. Schedule + done -->
+  <section class="wz-step" id="step-6">
+    <div id="schedule-panel" class="wz-body">
+      <h1 class="display-2 wz-title">How often should it check?</h1>
+      <p class="body wz-lede">
+        Each check is one small request to Withings, and nothing is uploaded unless something
+        new turned up. You can change this at any time in Settings.
+      </p>
+
+      <form class="radio-cards" id="schedule-form">
+        <label class="radio-card">
+          <input type="radio" name="interval" value="15" checked>
+          <span>
+            <span class="rc-title">Every 15 minutes <span class="pill pill-violet">Recommended</span></span>
+            <span class="rc-sub">A weigh-in shows up in Garmin within a quarter of an hour.</span>
+          </span>
+        </label>
+        <label class="radio-card">
+          <input type="radio" name="interval" value="60">
+          <span>
+            <span class="rc-title">Every hour</span>
+            <span class="rc-sub">Lighter touch. Fine if you weigh in around the same time each day.</span>
+          </span>
+        </label>
+        <label class="radio-card">
+          <input type="radio" name="interval" value="360">
+          <span>
+            <span class="rc-title">Every 6 hours</span>
+            <span class="rc-sub">Barely there. Measurements can sit for a few hours before they appear.</span>
+          </span>
+        </label>
+      </form>
+
+      <div class="wz-actions">
+        <button class="btn btn-accent btn-lg" type="button" id="finish-btn">Finish setup</button>
+        <button class="btn btn-ghost" type="button" data-goto="5">Back</button>
+      </div>
+    </div>
+
+    <div id="done-panel" class="wz-body hidden">
+      <h1 class="display-1 wz-title">You're set</h1>
+      <p class="body wz-lede">
+        The first sync is already running. From here on, this app checks Withings on its own
+        and quietly pushes anything new into Garmin Connect.
+      </p>
+
+      <div class="card card-pad stack-sm">
+        <div class="title">Bookmark this address</div>
+        <p class="body-sm">
+          The dashboard lives here, on this computer. Nothing on the internet can reach it.
+        </p>
+        <div id="copy-origin"></div>
+      </div>
+
+      <div class="card card-pad stack-sm">
+        <div class="title">Keep it running after a reboot</div>
+        <p class="body-sm">
+          Right now the sync only runs while this program is open. Run this once in a
+          terminal and the app registers itself with your operating system, so it starts up
+          on its own from now on:
+        </p>
+        <div id="copy-install"></div>
+        <p class="caption">
+          Optional, and reversible — <code>scalebridge-sync uninstall</code> takes it back out.
+        </p>
+      </div>
+
+      <div class="wz-actions">
+        <a class="btn btn-accent btn-lg" href="/">Go to dashboard</a>
+      </div>
+    </div>
+  </section>
+
+  </div>
+</main>
+
+<script src="/static/ui.js" defer></script>
+<script src="/static/garmin-connect.js" defer></script>
+<script src="/static/withings-connect.js" defer></script>
+<script src="/static/setup.js" defer></script>
+</body>
+</html>

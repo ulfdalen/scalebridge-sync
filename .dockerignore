@@ -1,0 +1,9 @@
+.git
+.github
+dist
+scalebridge-sync
+scalebridge-sync.exe
+*.md
+compose.yaml
+.goreleaser.yaml
+.tmp

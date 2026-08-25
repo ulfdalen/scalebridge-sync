@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Settings · scalebridge-sync</title>
+<link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <a class="brand" href="/">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M2 14h20"/><path d="M4.5 14v6.5"/><path d="M19.5 14v6.5"/>
+      <path d="M4.5 20.5a7.5 6 0 0 1 15 0"/><rect x="8.5" y="8" width="7" height="6" rx="1.6"/>
+    </svg>
+    <span>
+      <span class="brand-name">scalebridge-sync</span>
+      <span class="brand-sub">Withings → Garmin</span>
+    </span>
+  </a>
+  <span class="grow"></span>
+  <a class="navlink" href="/">Dashboard</a>
+  <a class="navlink active" href="/settings">Settings</a>
+</header>
+
+<noscript>
+  <div class="noscript">
+    <strong>This app needs JavaScript.</strong><br>
+    Settings are read from and written to the local API in the browser. Enable
+    JavaScript for this page (it is served from your own computer) and reload.
+  </div>
+</noscript>
+
+<main class="page page-narrow stack hidden" id="app">
+
+  <div class="banner banner-amber hidden" id="restart-banner">
+    <div>
+      <strong>Restart needed.</strong> The port change is saved but only takes effect
+      when scalebridge-sync starts again. Quit the app and start it, or run
+      <code>scalebridge-sync stop</code> then <code>scalebridge-sync start</code> if you
+      installed it as a service. Afterwards the dashboard lives at the new address.
+    </div>
+  </div>
+
+  <!-- sync schedule -->
+  <div class="card" id="schedule">
+    <div class="card-head"><span class="title grow">Sync schedule</span></div>
+    <div class="card-body stack-sm">
+      <p class="body-sm">
+        How often to ask Withings whether anything new turned up. Changes apply straight
+        away — no restart.
+      </p>
+      <label class="field">
+        <span class="label">Check for new measurements</span>
+        <select class="select" id="interval-select">
+          <option value="15">Every 15 minutes (recommended)</option>
+          <option value="60">Every hour</option>
+          <option value="360">Every 6 hours</option>
+        </select>
+      </label>
+    </div>
+  </div>
+
+  <!-- history -->
+  <div class="card" id="history">
+    <div class="card-head"><span class="title grow">Re-run history import</span></div>
+    <div class="card-body stack-sm">
+      <p class="body-sm">
+        Fetch a window of past measurements from Withings and upload anything Garmin is
+        missing. Measurements this app has already synced are skipped, so re-running is
+        safe — it just takes as long as the window is wide.
+      </p>
+      <div class="row row-wrap">
+        <button class="btn btn-secondary btn-sm" type="button" data-backfill="30d">Last 30 days</button>
+        <button class="btn btn-secondary btn-sm" type="button" data-backfill="1y">Last year</button>
+        <button class="btn btn-secondary btn-sm" type="button" data-backfill="all">Everything</button>
+      </div>
+      <p class="caption" id="backfill-note">Progress shows on the dashboard while it runs.</p>
+    </div>
+  </div>
+
+  <!-- Withings -->
+  <div class="card" id="withings">
+    <div class="card-head"><span class="title grow">Withings</span><span id="withings-pill"></span></div>
+    <div class="card-body stack-sm">
+      <p class="body-sm" id="withings-ident">Checking…</p>
+
+      <div class="stack-xs">
+        <span class="label">Callback URL registered on your Withings application</span>
+        <div id="copy-callback"></div>
+      </div>
+
+      <div class="row row-wrap" id="withings-actions"></div>
+
+      <details class="disclose" id="creds-disclose">
+        <summary>Change the Client ID / Client Secret</summary>
+        <div class="disclose-body stack-sm">
+          <div class="banner banner-amber">
+            <div>
+              Saving a <strong>different Client ID</strong> clears the stored Withings
+              authorization — you will have to approve access again afterwards. Changing only
+              the secret leaves the connection alone.
+            </div>
+          </div>
+          <div id="creds-mount"></div>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- Garmin -->
+  <div class="card" id="garmin">
+    <div class="card-head"><span class="title grow">Garmin Connect</span><span id="garmin-pill"></span></div>
+    <div class="card-body stack-sm">
+      <p class="body-sm" id="garmin-ident">Checking…</p>
+      <p class="caption">
+        Garmin sessions expire on their own schedule. If uploads start failing, sign in
+        again here — your password is never written to disk, only the session tokens are.
+      </p>
+      <div class="row row-wrap" id="garmin-actions"></div>
+    </div>
+  </div>
+
+  <!-- updates -->
+  <div class="card" id="updates">
+    <div class="card-head"><span class="title grow">Updates</span></div>
+    <div class="card-body stack-sm">
+      <p class="body-sm">
+        Off by default. When enabled, this app — not your browser — asks GitHub once a day
+        whether a newer release exists, and shows a pill on the dashboard if there is one.
+        Nothing else is sent or received.
+      </p>
+      <label class="check-inline">
+        <input type="checkbox" id="update-check">
+        <span>Check for new versions</span>
+      </label>
+      <div class="row row-wrap">
+        <button class="btn btn-secondary btn-sm" type="button" id="update-now">Check now</button>
+        <span class="caption" id="update-result"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- danger zone -->
+  <div class="card danger-zone" id="port">
+    <div class="card-head"><span class="title grow">Change the port</span></div>
+    <div class="card-body stack-sm">
+      <p class="body-sm">
+        This app listens on <span class="mono strong" id="port-current">—</span>. The port is
+        baked into the callback URL your Withings application knows, so changing it here
+        <strong>breaks the Withings connection until you update the portal to match</strong>.
+        Only worth doing if something else on this computer wants the same port.
+      </p>
+      <div class="row row-wrap">
+        <button class="btn btn-danger btn-sm" type="button" id="port-change">Change port…</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- about -->
+  <div class="card" id="about">
+    <div class="card-head"><span class="title grow">About</span></div>
+    <div class="card-body">
+      <dl class="kv-list">
+        <div class="kv"><dt>Version</dt><dd id="about-version">—</dd></div>
+        <div class="kv"><dt>Config file</dt><dd id="about-config">shown on the dashboard footer</dd></div>
+        <div class="kv"><dt>Source</dt><dd><a href="https://github.com/ulfdalen/scalebridge-sync" target="_blank" rel="noopener noreferrer">github.com/ulfdalen/scalebridge-sync</a></dd></div>
+        <div class="kv"><dt>Licence</dt><dd>MIT</dd></div>
+      </dl>
+    </div>
+  </div>
+
+</main>
+
+<footer class="foot">
+  <span id="version">scalebridge-sync</span>
+  <span class="grow"></span>
+  <a href="https://scalebridge.ulf.su" target="_blank" rel="noopener noreferrer">Hosted version</a>
+  <a href="https://github.com/ulfdalen/scalebridge-sync/issues" target="_blank" rel="noopener noreferrer">Report an issue</a>
+</footer>
+
+<script src="/static/ui.js" defer></script>
+<script src="/static/garmin-connect.js" defer></script>
+<script src="/static/withings-connect.js" defer></script>
+<script src="/static/settings.js" defer></script>
+</body>
+</html>

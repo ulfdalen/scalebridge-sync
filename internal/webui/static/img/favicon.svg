@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="scalebridge-sync">
+  <rect width="32" height="32" rx="8" fill="#6A57B3"/>
+  <g transform="translate(4 4)" fill="none" stroke="#ffffff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2 14h20"/>
+    <path d="M4.5 14v6.5"/>
+    <path d="M19.5 14v6.5"/>
+    <path d="M4.5 20.5a7.5 6 0 0 1 15 0"/>
+    <rect x="8.5" y="8" width="7" height="6" rx="1.6"/>
+  </g>
+</svg>

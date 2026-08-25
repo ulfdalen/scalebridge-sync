@@ -1,0 +1,16 @@
+# Run:    docker compose up -d
+# Update: docker compose pull && docker compose up -d
+# State lives in the named volume; recreating the container loses nothing.
+services:
+  scalebridge-sync:
+    image: ulfdalen/scalebridge-sync
+    container_name: scalebridge-sync
+    restart: unless-stopped
+    ports:
+      # Loopback only - the UI has no login. See DOCS.md "Security".
+      - "127.0.0.1:8723:8723"
+    volumes:
+      - scalebridge-sync:/data
+
+volumes:
+  scalebridge-sync:

@@ -1,0 +1,88 @@
+# Local smoke test: goreleaser release --snapshot --clean
+version: 2
+
+project_name: scalebridge-sync
+
+before:
+  hooks:
+    - go mod download
+    - go mod verify
+
+builds:
+  - id: scalebridge-sync
+    main: .
+    binary: scalebridge-sync
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    ignore:
+      # 32-bit ARM only ships for Linux (Raspberry Pi and friends).
+      - goos: windows
+        goarch: arm
+      - goos: darwin
+        goarch: arm
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+# Fat darwin binary as the headline macOS artifact; per-arch kept too.
+universal_binaries:
+  - id: scalebridge-sync-macos-universal
+    ids:
+      - scalebridge-sync
+    name_template: scalebridge-sync
+    replace: false
+
+archives:
+  - id: default
+    # darwin universal archives land as ..._darwin_all.tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  use: github-native
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot-{{ .ShortCommit }}"
+
+release:
+  github:
+    owner: ulfdalen
+    name: scalebridge-sync
+  draft: false
+  prerelease: auto
+  footer: |
+    ---
+
+    macOS: the binaries are not yet signed with an Apple Developer ID, so
+    Gatekeeper will quarantine the download. See the README section
+    "macOS Gatekeeper and Windows SmartScreen" for the one-line fix, or
+    install with `go install github.com/ulfdalen/scalebridge-sync@latest`,
+    which is not quarantined.
+
+    Verify a download against `checksums.txt`:
+
+        shasum -a 256 -c checksums.txt --ignore-missing

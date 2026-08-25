@@ -1,0 +1,9 @@
+scalebridge-sync
+scalebridge-sync.exe
+dist/
+.tmp/
+*.corrupt-*
+
+# Local dev journals - not part of the public repo
+/CLAUDE.md
+/DEVLOG.md
