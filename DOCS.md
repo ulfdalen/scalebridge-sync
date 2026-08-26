@@ -59,6 +59,8 @@ Coming soon — a `ulfdalen/tap` formula is planned for the first stable release
 
 ## Docker
 
+The image lives at [hub.docker.com/r/ulfdalen/scalebridge-sync](https://hub.docker.com/r/ulfdalen/scalebridge-sync/tags) — Docker Desktop users can start it straight from the **Run** button there (map port 8723 and mount a volume at `/data` when it asks, so your setup survives updates).
+
 The README's run command, unpacked:
 
 ```
