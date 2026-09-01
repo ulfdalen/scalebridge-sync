@@ -105,6 +105,34 @@ func TestNormalize(t *testing.T) {
 				if m.MuscleMassKG != nil || m.BoneMassKG != nil || m.HydrationPct != nil {
 					t.Errorf("expected nil pointers for absent measures: %+v", m)
 				}
+				if m.VisceralFat != nil || m.BMRKcal != nil || m.MetabolicAgeYears != nil {
+					t.Errorf("expected nil pointers for absent BodyScan measures: %+v", m)
+				}
+			},
+		},
+		{
+			name: "visceral fat, bmr and metabolic age",
+			group: RawMeasureGroup{
+				GroupID: 43,
+				Date:    1700000000,
+				Measures: []RawMeasure{
+					{Type: TypeWeight, Value: 805, Unit: -1},     // 80.5 kg
+					{Type: TypeVisceralFat, Value: 8, Unit: 0},   // index 8
+					{Type: TypeBMR, Value: 16855, Unit: -1},      // 1685.5 kcal/day
+					{Type: TypeMetabolicAge, Value: 34, Unit: 0}, // 34 years
+				},
+			},
+			ok: true,
+			check: func(t *testing.T, m Measurement) {
+				if got := deref(t, m.VisceralFat); got != 8 {
+					t.Errorf("VisceralFat = %v, want 8", got)
+				}
+				if got := deref(t, m.BMRKcal); got != 1685.5 {
+					t.Errorf("BMRKcal = %v, want 1685.5", got)
+				}
+				if got := deref(t, m.MetabolicAgeYears); got != 34 {
+					t.Errorf("MetabolicAgeYears = %v, want 34", got)
+				}
 			},
 		},
 		{
@@ -257,7 +285,7 @@ func TestGetMeasuresSince(t *testing.T) {
 	if got := form.Get("category"); got != "1" {
 		t.Errorf("category = %q", got)
 	}
-	if got := form.Get("meastypes"); got != "1,6,76,77,88,75" {
+	if got := form.Get("meastypes"); got != "1,6,76,77,88,75,170,226,227" {
 		t.Errorf("meastypes = %q", got)
 	}
 

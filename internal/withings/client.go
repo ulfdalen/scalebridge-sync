@@ -38,12 +38,15 @@ const scopeMetrics = "user.metrics"
 // Measurement type codes for the meastypes parameter.
 // https://developer.withings.com/developer-guide/v3/data-api/all-available-health-data/
 const (
-	TypeWeight     = 1
-	TypeFatRatio   = 6
-	TypeMuscleMass = 76
-	TypeHydration  = 77
-	TypeBoneMass   = 88
-	TypeBMI        = 75
+	TypeWeight       = 1
+	TypeFatRatio     = 6
+	TypeMuscleMass   = 76
+	TypeHydration    = 77
+	TypeBoneMass     = 88
+	TypeBMI          = 75
+	TypeVisceralFat  = 170
+	TypeBMR          = 226
+	TypeMetabolicAge = 227 // in the API-reference enum, but absent from the device-compatibility list — may never arrive
 )
 
 type Config struct {
@@ -188,15 +191,18 @@ type measureBody struct {
 // Measurement is a normalized weigh-in: weight, muscle and bone in kg, fat and
 // hydration in %.
 type Measurement struct {
-	GroupID      int64
-	MeasuredAt   time.Time
-	WeightKG     float64
-	BodyFatPct   *float64
-	MuscleMassKG *float64
-	BoneMassKG   *float64
-	HydrationPct *float64
-	BMI          *float64
-	DeviceID     string
+	GroupID           int64
+	MeasuredAt        time.Time
+	WeightKG          float64
+	BodyFatPct        *float64
+	MuscleMassKG      *float64
+	BoneMassKG        *float64
+	HydrationPct      *float64
+	BMI               *float64
+	VisceralFat       *float64 // unitless index, roughly 1–30
+	BMRKcal           *float64 // kcal/day
+	MetabolicAgeYears *float64 // years
+	DeviceID          string
 }
 
 // GetMeasures returns real (category=1) measurements from since until now, over
@@ -223,7 +229,9 @@ func (c *Client) GetMeasuresSince(ctx context.Context, accessToken string, lastU
 func measureForm() url.Values {
 	form := url.Values{}
 	form.Set("action", "getmeas")
-	form.Set("meastypes", fmt.Sprintf("%d,%d,%d,%d,%d,%d", TypeWeight, TypeFatRatio, TypeMuscleMass, TypeHydration, TypeBoneMass, TypeBMI))
+	form.Set("meastypes", fmt.Sprintf("%d,%d,%d,%d,%d,%d,%d,%d,%d",
+		TypeWeight, TypeFatRatio, TypeMuscleMass, TypeHydration, TypeBoneMass, TypeBMI,
+		TypeVisceralFat, TypeBMR, TypeMetabolicAge))
 	form.Set("category", "1")
 	return form
 }
@@ -294,6 +302,12 @@ func normalize(g RawMeasureGroup) (Measurement, bool) {
 			m.BoneMassKG = floatPtr(val)
 		case TypeBMI:
 			m.BMI = floatPtr(val)
+		case TypeVisceralFat:
+			m.VisceralFat = floatPtr(val)
+		case TypeBMR:
+			m.BMRKcal = floatPtr(val)
+		case TypeMetabolicAge:
+			m.MetabolicAgeYears = floatPtr(val)
 		}
 	}
 	return m, hasWeight

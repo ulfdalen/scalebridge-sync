@@ -549,7 +549,7 @@ func TestMeasurementsNewestFirst(t *testing.T) {
 		t.Fatalf("not newest first: %v", first)
 	}
 	// The contract promises the keys exist even when the value is null.
-	for _, k := range []string{"muscle_kg", "bone_kg", "hydration_pct", "bmi"} {
+	for _, k := range []string{"muscle_kg", "bone_kg", "hydration_pct", "bmi", "visceral_fat", "bmr_kcal", "metabolic_age_years"} {
 		v, ok := first[k]
 		if !ok || v != nil {
 			t.Fatalf("%s = %v (present=%v), want present and null", k, v, ok)

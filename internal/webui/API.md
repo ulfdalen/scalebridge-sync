@@ -100,6 +100,7 @@ Req `{"range": "30d"|"1y"|"all"}` → `{"started": true}` | 409 `{"error": "alre
 ```json
 {"items": [{"measured_at": "…", "weight_kg": 80.5, "body_fat_pct": 18.2, "muscle_kg": null,
             "bone_kg": null, "hydration_pct": null, "bmi": 24.1,
+            "visceral_fat": 8, "bmr_kcal": null, "metabolic_age_years": null,
             "synced": true, "sync_error": ""}]}
 ```
 

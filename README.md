@@ -23,7 +23,7 @@ Docker Desktop users can skip the terminal: the [image on Docker Hub](https://hu
 
 **2. Set it up.** Open [http://localhost:8723](http://localhost:8723) and follow the wizard. You need your Withings account, your Garmin account, and about ten minutes — the wizard walks you through everything, including creating your personal free Withings developer app, with the exact values to paste at every step.
 
-**3. Done.** Step on the scale — the weigh-in appears in Garmin Connect within minutes: weight, body fat, muscle mass, bone mass, hydration. The container keeps syncing in the background and survives reboots.
+**3. Done.** Step on the scale — the weigh-in appears in Garmin Connect within minutes: weight, body fat, muscle mass, bone mass, hydration, visceral fat, basal metabolic rate and metabolic age — whatever your scale reports. The container keeps syncing in the background and survives reboots.
 
 ## Rather not keep a computer running?
 

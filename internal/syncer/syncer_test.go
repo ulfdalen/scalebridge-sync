@@ -85,19 +85,22 @@ func TestTickHappyPath(t *testing.T) {
 // differently (MuscleMassKG vs MuscleKG), so a swap would ship bone as muscle.
 func TestTickMapsEveryBodyCompositionField(t *testing.T) {
 	h := newHarness(t)
-	h.w.addFull(1, hoursAgo(2), 80.5, 18.25, 60.2, 3.17, 55.5, 24.8)
+	h.w.addFull(1, hoursAgo(2), 80.5, 18.25, 60.2, 3.17, 55.5, 24.8, 8, 1685.5, 34)
 
 	h.tick()
 
 	got := parseFIT(t, h.g.accepted()[0].fit)[0]
 	want := fitRecord{
-		timestamp: got.timestamp,
-		weight:    8050,
-		fat:       1825,
-		hydration: 5550,
-		bone:      317,
-		muscle:    6020,
-		bmi:       248,
+		timestamp:    got.timestamp,
+		weight:       8050,
+		fat:          1825,
+		hydration:    5550,
+		bone:         317,
+		muscle:       6020,
+		basalMet:     6742, // 1685.5 kcal/day × 4
+		metabolicAge: 34,
+		visceralFat:  8,
+		bmi:          248,
 	}
 	if got != want {
 		t.Errorf("FIT record = %+v, want %+v", got, want)
@@ -114,6 +117,9 @@ func TestTickMapsEveryBodyCompositionField(t *testing.T) {
 		{"bone kg", stored.BoneKG, 3.17},
 		{"hydration %", stored.HydrationPct, 55.5},
 		{"bmi", stored.BMI, 24.8},
+		{"visceral fat", stored.VisceralFat, 8},
+		{"bmr kcal", stored.BMRKcal, 1685.5},
+		{"metabolic age", stored.MetabolicAgeYears, 34},
 	} {
 		if c.got == nil {
 			t.Errorf("stored %s is nil", c.name)

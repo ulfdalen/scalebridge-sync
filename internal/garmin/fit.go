@@ -15,13 +15,16 @@ import (
 // Measurement is one weigh-in. Nil optional fields are encoded as the FIT
 // "invalid" sentinel, which Garmin skips.
 type Measurement struct {
-	MeasuredAt   time.Time
-	WeightKG     float64  // required
-	BodyFatPct   *float64 // %
-	MuscleKG     *float64 // kg
-	BoneKG       *float64 // kg
-	HydrationPct *float64 // %
-	BMI          *float64 // kg/m²
+	MeasuredAt        time.Time
+	WeightKG          float64  // required
+	BodyFatPct        *float64 // %
+	MuscleKG          *float64 // kg
+	BoneKG            *float64 // kg
+	HydrationPct      *float64 // %
+	BMI               *float64 // kg/m²
+	VisceralFat       *float64 // unitless rating
+	BMRKcal           *float64 // kcal/day
+	MetabolicAgeYears *float64 // years
 }
 
 const (
@@ -34,7 +37,9 @@ const (
 	fitBaseUint16 = 0x84
 	fitBaseUint32 = 0x86
 
-	invUint16 = 0xFFFF // "missing value" sentinel
+	// "missing value" sentinels, one per base type.
+	invUint16 = 0xFFFF
+	invUint8  = 0xFF
 
 	msgFileID       = 0
 	msgWeightScale  = 30
@@ -110,17 +115,21 @@ func appendWeightScaleDef(body []byte) []byte {
 	)
 	body = binary.LittleEndian.AppendUint16(body, msgWeightScale)
 	return append(body,
-		0x07,                     // 7 fields
+		0x0A,                     // 10 fields
 		253, 0x04, fitBaseUint32, // timestamp (always present)
 		0, 0x02, fitBaseUint16, //   weight
 		1, 0x02, fitBaseUint16, //   percent_fat
 		2, 0x02, fitBaseUint16, //   percent_hydration
 		4, 0x02, fitBaseUint16, //   bone_mass
 		5, 0x02, fitBaseUint16, //   muscle_mass
+		7, 0x02, fitBaseUint16, //   basal_met
+		10, 0x01, fitBaseUint8, //   metabolic_age
+		11, 0x01, fitBaseUint8, //   visceral_fat_rating
 		13, 0x02, fitBaseUint16, //  bmi
 	)
 }
 
+// Field order here must match the definition message above, byte for byte.
 func appendWeightScaleData(body []byte, m Measurement) []byte {
 	body = append(body, 0x01) // data header, local 1
 	body = binary.LittleEndian.AppendUint32(body, toFITTime(m.MeasuredAt))
@@ -129,6 +138,9 @@ func appendWeightScaleData(body []byte, m Measurement) []byte {
 	body = appendScaled16(body, m.HydrationPct, 100)
 	body = appendScaled16(body, m.BoneKG, 100)
 	body = appendScaled16(body, m.MuscleKG, 100)
+	body = appendScaled16(body, m.BMRKcal, 4)
+	body = appendScaled8(body, m.MetabolicAgeYears, 1)
+	body = appendScaled8(body, m.VisceralFat, 1)
 	body = appendScaled16(body, m.BMI, 10)
 	return body
 }
@@ -144,18 +156,32 @@ func appendScaled16(b []byte, p *float64, scale float64) []byte {
 	return binary.LittleEndian.AppendUint16(b, scaled16(*p, scale))
 }
 
-// scaled16 applies a FIT scale factor (100 for kg and %, 10 for BMI). It rounds
-// — truncating shaves up to 10 g off a weigh-in — and clamps to 0xFFFE, since
-// 0xFFFF means "missing" and wrapping would yield a plausible wrong weight.
-func scaled16(v, scale float64) uint16 {
+func appendScaled8(b []byte, p *float64, scale float64) []byte {
+	if p == nil {
+		return append(b, invUint8)
+	}
+	return append(b, scaled8(*p, scale))
+}
+
+// scaled16 applies a FIT scale factor (100 for kg and %, 10 for BMI, 4 for
+// basal_met); scaled8 does the same for the one-byte ratings, which are scale 1.
+func scaled16(v, scale float64) uint16 { return uint16(clampScaled(v, scale, invUint16-1)) }
+
+func scaled8(v, scale float64) uint8 { return uint8(clampScaled(v, scale, invUint8-1)) }
+
+// clampScaled rounds v×scale — truncating shaves up to 10 g off a weigh-in —
+// and pins it to [0, max]. max stops one short of the invalid sentinel, since
+// wrapping would yield a plausible wrong weight and landing on the sentinel
+// itself would read as "missing".
+func clampScaled(v, scale, max float64) float64 {
 	n := math.Round(v * scale)
-	if n < 0 {
+	if !(n > 0) { // also catches NaN
 		return 0
 	}
-	if n > invUint16-1 {
-		return invUint16 - 1
+	if n > max {
+		return max
 	}
-	return uint16(n)
+	return n
 }
 
 // ── CRC-16 (FIT variant) ────────────────────────────────

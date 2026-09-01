@@ -100,7 +100,7 @@ func (f *fakeWithings) add(grpid int64, at time.Time, kg float64) {
 
 // addFull is add() with every body-composition value Withings can report, in
 // Withings wire units (value × 10^unit).
-func (f *fakeWithings) addFull(grpid int64, at time.Time, kg, fatPct, muscleKG, boneKG, hydrationPct, bmi float64) {
+func (f *fakeWithings) addFull(grpid int64, at time.Time, kg, fatPct, muscleKG, boneKG, hydrationPct, bmi, visceralFat, bmrKcal, metabolicAgeYears float64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	hundredths := func(v float64) int { return int(v*100 + 0.5) }
@@ -117,6 +117,9 @@ func (f *fakeWithings) addFull(grpid int64, at time.Time, kg, fatPct, muscleKG, 
 				{Type: withings.TypeBoneMass, Value: hundredths(boneKG), Unit: -2},
 				{Type: withings.TypeHydration, Value: hundredths(hydrationPct), Unit: -2},
 				{Type: withings.TypeBMI, Value: int(bmi*10 + 0.5), Unit: -1},
+				{Type: withings.TypeVisceralFat, Value: hundredths(visceralFat), Unit: -2},
+				{Type: withings.TypeBMR, Value: hundredths(bmrKcal), Unit: -2},
+				{Type: withings.TypeMetabolicAge, Value: hundredths(metabolicAgeYears), Unit: -2},
 			},
 		},
 		updated: f.updateTime,
@@ -482,22 +485,25 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // ── FIT reader (just enough to assert on what we sent) ───
 
 // Offsets from the encoder: 14 header + 18 file_id def + 10 file_id data +
-// 27 weight_scale def, then 1 + 4 + 6×2 per record, then a 2-byte CRC.
+// 36 weight_scale def, then 1 + 4 + 7×2 + 2 per record, then a 2-byte CRC.
 const (
-	fitFirstRecord = 14 + 18 + 10 + 27
-	fitRecordLen   = 1 + 4 + 6*2
+	fitFirstRecord = 14 + 18 + 10 + 36
+	fitRecordLen   = 1 + 4 + 7*2 + 2
 )
 
 // Field order inside a weight_scale record, straight from the encoder's
 // definition message.
 type fitRecord struct {
-	timestamp uint32
-	weight    uint16 // kg × 100
-	fat       uint16 // % × 100
-	hydration uint16 // % × 100
-	bone      uint16 // kg × 100
-	muscle    uint16 // kg × 100
-	bmi       uint16 // × 10
+	timestamp    uint32
+	weight       uint16 // kg × 100
+	fat          uint16 // % × 100
+	hydration    uint16 // % × 100
+	bone         uint16 // kg × 100
+	muscle       uint16 // kg × 100
+	basalMet     uint16 // kcal/day × 4
+	metabolicAge uint8  // years
+	visceralFat  uint8  // rating
+	bmi          uint16 // × 10
 }
 
 func parseFIT(t *testing.T, b []byte) []fitRecord {
@@ -518,15 +524,20 @@ func parseFIT(t *testing.T, b []byte) []fitRecord {
 		if b[off] != 0x01 {
 			t.Fatalf("record %d header = %02x, want 01", i, b[off])
 		}
+		// The two uint8 ratings sit between muscle_mass and bmi, so only the
+		// leading six fields are evenly spaced.
 		field := func(n int) uint16 { return binary.LittleEndian.Uint16(b[off+5+n*2 : off+7+n*2]) }
 		records[i] = fitRecord{
-			timestamp: binary.LittleEndian.Uint32(b[off+1 : off+5]),
-			weight:    field(0),
-			fat:       field(1),
-			hydration: field(2),
-			bone:      field(3),
-			muscle:    field(4),
-			bmi:       field(5),
+			timestamp:    binary.LittleEndian.Uint32(b[off+1 : off+5]),
+			weight:       field(0),
+			fat:          field(1),
+			hydration:    field(2),
+			bone:         field(3),
+			muscle:       field(4),
+			basalMet:     field(5),
+			metabolicAge: b[off+17],
+			visceralFat:  b[off+18],
+			bmi:          binary.LittleEndian.Uint16(b[off+19 : off+21]),
 		}
 	}
 	return records

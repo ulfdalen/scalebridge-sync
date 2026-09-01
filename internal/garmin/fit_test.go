@@ -49,14 +49,14 @@ func TestEncodeWeightFIT_structure(t *testing.T) {
 }
 
 func TestEncodeWeightFIT_optionalFieldsInvalid(t *testing.T) {
-	// Nil body-composition fields must encode as the 0xFFFF invalid sentinel,
-	// which Garmin's parser skips.
+	// Nil body-composition fields must encode as the invalid sentinel — 0xFFFF
+	// for uint16, 0xFF for uint8 — which Garmin's parser skips.
 	fit := EncodeWeightFIT(Measurement{
 		MeasuredAt: time.Unix(1700000000, 0).UTC(),
 		WeightKG:   75.0,
 	})
 
-	base := 14 + 18 + 10 + 27 // start of the data message; see firstRecord below
+	base := firstRecord
 	if fit[base] != 0x01 {
 		t.Fatalf("data header: got %02x want 01", fit[base])
 	}
@@ -64,21 +64,82 @@ func TestEncodeWeightFIT_optionalFieldsInvalid(t *testing.T) {
 	if weight != 7500 {
 		t.Fatalf("weight encoded: got %d want 7500 (75.0kg × 100)", weight)
 	}
+	// percent_fat, percent_hydration, bone_mass, muscle_mass, basal_met.
 	for i := 0; i < 5; i++ {
-		off := base + 1 + 4 + 2 + i*2
+		off := base + 7 + i*2
 		got := binary.LittleEndian.Uint16(fit[off : off+2])
 		if got != 0xFFFF {
-			t.Fatalf("optional field %d: got %04x want ffff (invalid)", i, got)
+			t.Fatalf("optional uint16 field %d: got %04x want ffff (invalid)", i, got)
 		}
+	}
+	if fit[base+17] != 0xFF {
+		t.Fatalf("metabolic_age: got %02x want ff (invalid)", fit[base+17])
+	}
+	if fit[base+18] != 0xFF {
+		t.Fatalf("visceral_fat_rating: got %02x want ff (invalid)", fit[base+18])
+	}
+	if got := binary.LittleEndian.Uint16(fit[base+19 : base+21]); got != 0xFFFF {
+		t.Fatalf("bmi: got %04x want ffff (invalid)", got)
+	}
+}
+
+func TestEncodeWeightFIT_bodyScanFields(t *testing.T) {
+	bmr := 1685.5
+	metabolicAge := 34.0
+	visceral := 8.0
+	fit := EncodeWeightFIT(Measurement{
+		MeasuredAt:        time.Unix(1700000000, 0).UTC(),
+		WeightKG:          75.0,
+		BMRKcal:           &bmr,
+		MetabolicAgeYears: &metabolicAge,
+		VisceralFat:       &visceral,
+	})
+
+	base := firstRecord
+	// basal_met is scale 4: kcal/day × 4, rounded.
+	if got := binary.LittleEndian.Uint16(fit[base+15 : base+17]); got != 6742 {
+		t.Fatalf("basal_met: got %d want 6742 (1685.5 × 4)", got)
+	}
+	if fit[base+17] != 34 {
+		t.Fatalf("metabolic_age: got %d want 34", fit[base+17])
+	}
+	if fit[base+18] != 8 {
+		t.Fatalf("visceral_fat_rating: got %d want 8", fit[base+18])
+	}
+}
+
+func TestEncodeWeightFIT_bodyScanFieldsClamped(t *testing.T) {
+	// A garbage reading must not wrap into a plausible-looking number, and must
+	// not land on the invalid sentinel either.
+	bmr := 99999.0
+	metabolicAge := 900.0
+	visceral := -5.0
+	fit := EncodeWeightFIT(Measurement{
+		MeasuredAt:        time.Unix(1700000000, 0).UTC(),
+		WeightKG:          75.0,
+		BMRKcal:           &bmr,
+		MetabolicAgeYears: &metabolicAge,
+		VisceralFat:       &visceral,
+	})
+
+	base := firstRecord
+	if got := binary.LittleEndian.Uint16(fit[base+15 : base+17]); got != 0xFFFE {
+		t.Fatalf("basal_met clamp: got %04x want fffe", got)
+	}
+	if fit[base+17] != 0xFE {
+		t.Fatalf("metabolic_age clamp: got %02x want fe", fit[base+17])
+	}
+	if fit[base+18] != 0 {
+		t.Fatalf("visceral_fat_rating clamp: got %d want 0", fit[base+18])
 	}
 }
 
 // Where the first weight_scale data message starts, and how long each one is:
-// 14 header + 18 file_id def + 10 file_id data + 27 weight_scale def, then
-// 1 header + 4 timestamp + 6 × 2 fields per record.
+// 14 header + 18 file_id def + 10 file_id data + 36 weight_scale def, then
+// 1 header + 4 timestamp + 7 × uint16 + 2 × uint8 per record.
 const (
-	firstRecord = 14 + 18 + 10 + 27
-	recordLen   = 1 + 4 + 6*2
+	firstRecord = 14 + 18 + 10 + 36
+	recordLen   = 1 + 4 + 7*2 + 2
 )
 
 func TestEncodeWeightFITs_multiRecord(t *testing.T) {
@@ -92,7 +153,7 @@ func TestEncodeWeightFITs_multiRecord(t *testing.T) {
 	fit := EncodeWeightFITs(ms)
 
 	// The exact length proves the definition message appears once: a repeat
-	// would add 27 bytes.
+	// would add 36 bytes.
 	if want := firstRecord + len(ms)*recordLen + 2; len(fit) != want {
 		t.Fatalf("length: got %d want %d (definition message must be written once)", len(fit), want)
 	}
@@ -125,12 +186,19 @@ func TestEncodeWeightFITs_multiRecord(t *testing.T) {
 		prev = ts
 	}
 
-	// The second record carries no body composition — all five are invalid.
-	for i := 0; i < 5; i++ {
-		off := firstRecord + recordLen + 1 + 4 + 2 + i*2
+	// The second record carries no body composition — every optional is invalid.
+	second := firstRecord + recordLen
+	for i := 0; i < 5; i++ { // percent_fat … basal_met
+		off := second + 7 + i*2
 		if got := binary.LittleEndian.Uint16(fit[off : off+2]); got != 0xFFFF {
-			t.Fatalf("record 1 optional field %d: got %04x want ffff (invalid)", i, got)
+			t.Fatalf("record 1 optional uint16 field %d: got %04x want ffff (invalid)", i, got)
 		}
+	}
+	if fit[second+17] != 0xFF || fit[second+18] != 0xFF {
+		t.Fatalf("record 1 uint8 optionals: got %02x,%02x want ff,ff (invalid)", fit[second+17], fit[second+18])
+	}
+	if got := binary.LittleEndian.Uint16(fit[second+19 : second+21]); got != 0xFFFF {
+		t.Fatalf("record 1 bmi: got %04x want ffff (invalid)", got)
 	}
 }
 

@@ -74,16 +74,19 @@ type Garmin struct {
 }
 
 type Measurement struct {
-	GroupID      int64     `json:"grpid"`
-	MeasuredAt   time.Time `json:"measured_at"`
-	WeightKG     float64   `json:"weight_kg"`
-	BodyFatPct   *float64  `json:"body_fat_pct,omitempty"`
-	MuscleKG     *float64  `json:"muscle_kg,omitempty"`
-	BoneKG       *float64  `json:"bone_kg,omitempty"`
-	HydrationPct *float64  `json:"hydration_pct,omitempty"`
-	BMI          *float64  `json:"bmi,omitempty"`
-	Synced       bool      `json:"synced,omitempty"`     // meaningful in Recent only
-	SyncError    string    `json:"sync_error,omitempty"` // meaningful in Recent only
+	GroupID           int64     `json:"grpid"`
+	MeasuredAt        time.Time `json:"measured_at"`
+	WeightKG          float64   `json:"weight_kg"`
+	BodyFatPct        *float64  `json:"body_fat_pct,omitempty"`
+	MuscleKG          *float64  `json:"muscle_kg,omitempty"`
+	BoneKG            *float64  `json:"bone_kg,omitempty"`
+	HydrationPct      *float64  `json:"hydration_pct,omitempty"`
+	BMI               *float64  `json:"bmi,omitempty"`
+	VisceralFat       *float64  `json:"visceral_fat,omitempty"`
+	BMRKcal           *float64  `json:"bmr_kcal,omitempty"`
+	MetabolicAgeYears *float64  `json:"metabolic_age_years,omitempty"`
+	Synced            bool      `json:"synced,omitempty"`     // meaningful in Recent only
+	SyncError         string    `json:"sync_error,omitempty"` // meaningful in Recent only
 }
 
 type Synced struct {

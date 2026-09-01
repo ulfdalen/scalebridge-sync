@@ -645,26 +645,32 @@ func sleep(ctx context.Context, d time.Duration) error {
 
 func toStore(m withings.Measurement) store.Measurement {
 	return store.Measurement{
-		GroupID:      m.GroupID,
-		MeasuredAt:   m.MeasuredAt,
-		WeightKG:     m.WeightKG,
-		BodyFatPct:   m.BodyFatPct,
-		MuscleKG:     m.MuscleMassKG,
-		BoneKG:       m.BoneMassKG,
-		HydrationPct: m.HydrationPct,
-		BMI:          m.BMI,
+		GroupID:           m.GroupID,
+		MeasuredAt:        m.MeasuredAt,
+		WeightKG:          m.WeightKG,
+		BodyFatPct:        m.BodyFatPct,
+		MuscleKG:          m.MuscleMassKG,
+		BoneKG:            m.BoneMassKG,
+		HydrationPct:      m.HydrationPct,
+		BMI:               m.BMI,
+		VisceralFat:       m.VisceralFat,
+		BMRKcal:           m.BMRKcal,
+		MetabolicAgeYears: m.MetabolicAgeYears,
 	}
 }
 
 func toGarmin(m store.Measurement) garmin.Measurement {
 	return garmin.Measurement{
-		MeasuredAt:   m.MeasuredAt,
-		WeightKG:     m.WeightKG,
-		BodyFatPct:   m.BodyFatPct,
-		MuscleKG:     m.MuscleKG,
-		BoneKG:       m.BoneKG,
-		HydrationPct: m.HydrationPct,
-		BMI:          m.BMI,
+		MeasuredAt:        m.MeasuredAt,
+		WeightKG:          m.WeightKG,
+		BodyFatPct:        m.BodyFatPct,
+		MuscleKG:          m.MuscleKG,
+		BoneKG:            m.BoneKG,
+		HydrationPct:      m.HydrationPct,
+		BMI:               m.BMI,
+		VisceralFat:       m.VisceralFat,
+		BMRKcal:           m.BMRKcal,
+		MetabolicAgeYears: m.MetabolicAgeYears,
 	}
 }
 

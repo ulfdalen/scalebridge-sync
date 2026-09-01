@@ -102,15 +102,18 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 // Spells out the nulls: store.Measurement omits empty pointers, and the API
 // contract promises the keys are always present.
 type measurementResp struct {
-	MeasuredAt   time.Time `json:"measured_at"`
-	WeightKG     float64   `json:"weight_kg"`
-	BodyFatPct   *float64  `json:"body_fat_pct"`
-	MuscleKG     *float64  `json:"muscle_kg"`
-	BoneKG       *float64  `json:"bone_kg"`
-	HydrationPct *float64  `json:"hydration_pct"`
-	BMI          *float64  `json:"bmi"`
-	Synced       bool      `json:"synced"`
-	SyncError    string    `json:"sync_error"`
+	MeasuredAt        time.Time `json:"measured_at"`
+	WeightKG          float64   `json:"weight_kg"`
+	BodyFatPct        *float64  `json:"body_fat_pct"`
+	MuscleKG          *float64  `json:"muscle_kg"`
+	BoneKG            *float64  `json:"bone_kg"`
+	HydrationPct      *float64  `json:"hydration_pct"`
+	BMI               *float64  `json:"bmi"`
+	VisceralFat       *float64  `json:"visceral_fat"`
+	BMRKcal           *float64  `json:"bmr_kcal"`
+	MetabolicAgeYears *float64  `json:"metabolic_age_years"`
+	Synced            bool      `json:"synced"`
+	SyncError         string    `json:"sync_error"`
 }
 
 func (s *Server) handleMeasurements(w http.ResponseWriter, r *http.Request) {
@@ -123,15 +126,18 @@ func (s *Server) handleMeasurements(w http.ResponseWriter, r *http.Request) {
 		for i := len(recent) - 1; i >= 0 && len(items) < limit; i-- {
 			m := recent[i]
 			items = append(items, measurementResp{
-				MeasuredAt:   m.MeasuredAt,
-				WeightKG:     m.WeightKG,
-				BodyFatPct:   m.BodyFatPct,
-				MuscleKG:     m.MuscleKG,
-				BoneKG:       m.BoneKG,
-				HydrationPct: m.HydrationPct,
-				BMI:          m.BMI,
-				Synced:       m.Synced,
-				SyncError:    m.SyncError,
+				MeasuredAt:        m.MeasuredAt,
+				WeightKG:          m.WeightKG,
+				BodyFatPct:        m.BodyFatPct,
+				MuscleKG:          m.MuscleKG,
+				BoneKG:            m.BoneKG,
+				HydrationPct:      m.HydrationPct,
+				BMI:               m.BMI,
+				VisceralFat:       m.VisceralFat,
+				BMRKcal:           m.BMRKcal,
+				MetabolicAgeYears: m.MetabolicAgeYears,
+				Synced:            m.Synced,
+				SyncError:         m.SyncError,
 			})
 		}
 		return nil
