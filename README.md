@@ -7,6 +7,15 @@ Sync your Withings scale to Garmin Connect, from your own computer. No cloud, no
 [![Docker](https://img.shields.io/docker/pulls/ulfdalen/scalebridge-sync?label=docker)](https://hub.docker.com/r/ulfdalen/scalebridge-sync)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
+## Choose how to sync
+
+| | Free self-hosted | Hosted ScaleBridge |
+| --- | --- | --- |
+| Runs on | Your computer or server; keep it running for automatic sync | Our servers; no computer to keep running |
+| Setup | Install this app and create a free Withings developer app | Connect your Withings and Garmin accounts |
+| Price | Free, including automatic sync | Manual sync is free; automatic sync is **$6/year during the launch offer**, locked in while you stay subscribed |
+| Get started | [Install for free below](#three-steps) | [Open hosted ScaleBridge](https://scalebridge.ulf.su/?utm_source=github&utm_medium=referral&utm_campaign=self_hosted&utm_content=readme_comparison) |
+
 ![The setup wizard: a guided walkthrough that gets your scale talking to Garmin in about five minutes](.github/wizard.png)
 
 ## Three steps
@@ -27,7 +36,7 @@ Docker Desktop users can skip the terminal: the [image on Docker Hub](https://hu
 
 ## Rather not keep a computer running?
 
-This app must be running for syncs to happen. If you'd rather not leave a machine on, [**ScaleBridge**](https://scalebridge.ulf.su) is the hosted version by the same author: the same sync engine running around the clock, connected in two minutes, with a free manual-sync tier and a small yearly fee for fully automatic sync. Self-host for free, or let [scalebridge.ulf.su](https://scalebridge.ulf.su) handle it — same engine either way.
+This app must be running for syncs to happen. [**Hosted ScaleBridge**](https://scalebridge.ulf.su/?utm_source=github&utm_medium=referral&utm_campaign=self_hosted&utm_content=readme_hosted) is the version by the same author, running around the clock without a computer of your own. Manual sync is free. Automatic sync starts with a 14-day free trial; the launch offer is **$6/year**, with that price locked in for as long as you stay subscribed.
 
 ## Full guide
 
@@ -35,7 +44,7 @@ Everything else lives in **[DOCS.md](DOCS.md)**: install options (binaries, `go 
 
 ## Support the project
 
-If this saved you some typing, you can [buy me a coffee](https://buymeacoffee.com/ulfdalen) — or try the hosted version at [scalebridge.ulf.su](https://scalebridge.ulf.su), which keeps this project maintained.
+If this saved you some typing, you can [buy me a coffee](https://buymeacoffee.com/ulfdalen) — or try the hosted version at [scalebridge.ulf.su](https://scalebridge.ulf.su/?utm_source=github&utm_medium=referral&utm_campaign=self_hosted&utm_content=readme_support), which keeps this project maintained.
 
 [![Buy me a coffee](https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&slug=ulfdalen&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff)](https://buymeacoffee.com/ulfdalen)
 

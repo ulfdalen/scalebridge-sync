@@ -2,7 +2,7 @@
 
 Everything beyond the [three steps in the README](README.md). One binary, a setup wizard in your browser, and every weigh-in on your Withings scale shows up in Garmin Connect on its own.
 
-If you'd rather not run it yourself, the hosted version at [scalebridge.ulf.su](https://scalebridge.ulf.su) does all of this for you.
+If you'd rather not run it yourself, [hosted ScaleBridge](https://scalebridge.ulf.su/?utm_source=github&utm_medium=referral&utm_campaign=self_hosted&utm_content=docs_intro) runs on our servers. Manual sync is free; automatic sync is $6/year during the launch offer, locked in while you stay subscribed. For the free self-hosted app, continue with [installation](#install) below.
 
 - [Install](#install)
 - [Docker](#docker)
