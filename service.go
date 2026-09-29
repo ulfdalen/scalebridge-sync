@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,15 +16,25 @@ import (
 )
 
 // newService builds the OS service handle. dir must already be absolute.
-func newService(dir string) (service.Service, error) {
+// serviceArgs is the command line baked into the OS service at install time.
+// The absolute config dir goes in because on Windows the service runs as
+// LocalSystem, whose os.UserConfigDir() is not the installing user's AppData,
+// so it would sync from an empty state file. --public-url goes in so the
+// service comes back with the identity the proxy and Withings expect.
+func serviceArgs(dir string, public *url.URL) []string {
+	args := []string{"run", "--config", dir}
+	if public != nil {
+		args = append(args, "--public-url", public.String())
+	}
+	return args
+}
+
+func newService(dir string, public *url.URL) (service.Service, error) {
 	cfg := &service.Config{
 		Name:        "scalebridge-sync",
 		DisplayName: "ScaleBridge Sync",
 		Description: "Syncs Withings scale measurements to Garmin Connect.",
-		// The absolute config dir is baked in at install time: on Windows the
-		// service runs as LocalSystem, whose os.UserConfigDir() is not the
-		// installing user's AppData, so it would sync from an empty state file.
-		Arguments: []string{"run", "--config", dir},
+		Arguments:   serviceArgs(dir, public),
 	}
 
 	switch runtime.GOOS {
@@ -40,17 +51,18 @@ func newService(dir string) (service.Service, error) {
 		}
 	}
 
-	return service.New(&program{dir: dir}, cfg)
+	return service.New(&program{dir: dir, public: public}, cfg)
 }
 
 // program is the kardianos side of the same server "run" starts.
 type program struct {
-	dir string
-	app *app
+	dir    string
+	public *url.URL
+	app    *app
 }
 
 func (p *program) Start(s service.Service) error {
-	a, err := newApp(p.dir, "127.0.0.1")
+	a, err := newApp(p.dir, "127.0.0.1", p.public)
 	if err != nil {
 		return err
 	}
@@ -58,6 +70,7 @@ func (p *program) Start(s service.Service) error {
 		return fmt.Errorf("listen on 127.0.0.1:%d: %w", a.port, err)
 	}
 	p.app = a
+	warnPublic(p.public)
 	a.start() // must return promptly: the serving happens in goroutines
 	return nil
 }
@@ -69,8 +82,8 @@ func (p *program) Stop(s service.Service) error {
 	return nil
 }
 
-func runUnderServiceManager(dir string) int {
-	svc, err := newService(dir)
+func runUnderServiceManager(dir string, public *url.URL) int {
+	svc, err := newService(dir, public)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -84,14 +97,14 @@ func runUnderServiceManager(dir string) int {
 
 // ── control commands ──
 
-func cmdInstall(dir string) int {
+func cmdInstall(dir string, public *url.URL) int {
 	// Create the config dir first: the absolute path baked into the unit has to
 	// exist before the service ever starts.
 	if _, err := store.Open(dir); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	svc, err := newService(dir)
+	svc, err := newService(dir, public)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -125,7 +138,7 @@ func cmdInstall(dir string) int {
 }
 
 func cmdUninstall(dir string) int {
-	svc, err := newService(dir)
+	svc, err := newService(dir, nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -141,7 +154,7 @@ func cmdUninstall(dir string) int {
 }
 
 func cmdControl(dir, action string) int {
-	svc, err := newService(dir)
+	svc, err := newService(dir, nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -176,7 +189,7 @@ func cmdStatus(dir string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	svc, err := newService(dir)
+	svc, err := newService(dir, nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1

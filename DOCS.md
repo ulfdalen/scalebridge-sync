@@ -8,6 +8,7 @@ If you'd rather not run it yourself, the hosted version at [scalebridge.ulf.su](
 - [Docker](#docker)
 - [Quick start](#quick-start)
 - [Keep it running after a reboot](#keep-it-running-after-a-reboot)
+- [Behind a reverse proxy](#behind-a-reverse-proxy)
 - [The Withings developer app](#the-withings-developer-app)
 - [macOS Gatekeeper and Windows SmartScreen](#macos-gatekeeper-and-windows-smartscreen)
 - [Security](#security)
@@ -130,6 +131,26 @@ On every platform the absolute config directory is baked into the service argume
 
 `./scalebridge-sync uninstall` removes it again. `start`, `stop` and `status` control and inspect the installed service.
 
+## Behind a reverse proxy
+
+By default the UI only answers to `localhost`. Open it through any other name — your NAS's hostname, a LAN IP, a domain of your own — and every request gets `403 forbidden_host`. That is deliberate: the UI has no login, and the loopback bind, the Host-header allowlist and the Origin check are its entire security model.
+
+If you want the dashboard on a hostname of your own anyway, tell the app which origin your proxy serves it at:
+
+```
+scalebridge-sync --public-url https://scale.example.com
+```
+
+Under Docker, set `SCALEBRIDGE_PUBLIC_URL` instead — [compose.yaml](compose.yaml) has a commented example. With that in place:
+
+- Requests carrying that Host header are accepted next to the localhost ones, and the browser's Origin check accepts that origin too. The proxy must pass `Host` through unchanged, port included: `proxy_set_header Host $http_host;` in nginx (`$host` drops the port); Caddy and Traefik forward it by default. The scheme has to match as well — an HTTPS proxy in front of `--public-url http://…` loads the pages, but every button fails with `403 csrf`. Only the root path is supported, not a sub-path.
+- The Withings callback URL becomes `https://scale.example.com/callback`. The wizard shows it, and that is the string to register on your Withings application. If you set up on localhost first, change it on the portal before connecting Withings again.
+- The `sync`, `open` and `status` commands keep talking to the app on localhost. `install` bakes the flag into the service definition the same way it bakes `--config` — to add or change it later, `uninstall` and `install` again (and note that `sudo` drops the environment variable). The service always listens on `127.0.0.1`, so the proxy has to run on the same machine.
+
+**There is still no login.** Anyone who can reach the proxy can see your measurements, trigger and disconnect syncs, and enter new Withings or Garmin credentials. Tokens and secrets are never readable through the UI, but that is all it protects. A hostname with nothing in front of it is an unauthenticated web app, so put the proxy's own login in front (basic auth, Authelia, Authentik, Cloudflare Access, Tailscale — whichever you already run) and serve it over HTTPS; the app warns on start when the public URL is plain `http://`, because the Garmin password and Withings secret you type into the UI would cross the network unencrypted. The Host check is not authentication: anything that can reach the port directly can send that Host header, so publish the port to the loopback only (or to a Docker network shared with the proxy) and make the proxy the only way in. If the proxy also answers plain HTTP on the same name, redirect it to HTTPS. If you would rather not run a proxy at all, an SSH tunnel needs no flag and no portal change: `ssh -L 8723:127.0.0.1:8723 your-nas`, then open `http://localhost:8723` as usual.
+
+One Withings detail: their portal documents that `localhost` and IP-address callback URLs are only accepted for applications in its ten-user "restricted mode" — which is what a personal app is, and why the default setup works at all. A real hostname is accepted either way; if the portal refuses your URL, its error says which rule it broke.
+
 ## The Withings developer app
 
 The wizard's centerpiece is a guided walkthrough for creating your own Withings developer app. This is the one step that looks unusual, so here is the point of it: your credentials are yours, your data flows directly between Withings, your computer, and Garmin, and nothing ever passes through a server belonging to this project or its author. There is no server to pass through.
@@ -139,7 +160,7 @@ The portal walkthrough, in short:
 1. Go to [developer.withings.com](https://developer.withings.com/) and sign in with your normal Withings account. Open the developer dashboard and choose to create a new application.
 2. Pick the public API integration type (not the medical or research programs) and accept the terms.
 3. Fill in the application details. Name and description are yours to choose — "scalebridge-sync" and one sentence are fine. Nothing here is reviewed.
-4. Set the callback URL to exactly `http://localhost:8723/callback`. This is the field that breaks setups: `http` not `https`, `localhost` not `127.0.0.1`, port `8723`, no trailing slash. The wizard shows the exact string with a copy button, built from the port it actually bound.
+4. Set the callback URL to exactly `http://localhost:8723/callback`. This is the field that breaks setups: `http` not `https`, `localhost` not `127.0.0.1`, port `8723`, no trailing slash. The wizard shows the exact string with a copy button, built from the port it actually bound. (Running it [behind a reverse proxy](#behind-a-reverse-proxy)? Then it is your public URL plus `/callback`, and the wizard shows that instead.)
 5. Save, then copy the **Client ID** and **Client Secret** into the wizard. The secret is stored on your computer and never leaves it.
 
 Withings changes the portal's wording and layout every now and then, so treat the list above as the shape of the thing. The wizard inside the app always shows the current steps, with the target field highlighted at each stage.
@@ -171,7 +192,7 @@ Either way, verify the download against `checksums.txt` first — that tells you
 
   This is the same posture as `docker`, `gh` and `kubectl`, and for the same reason: encrypting a file with a key stored next to it protects nothing. If someone can read files as your user, they can read the key too. File permissions are the actual control here.
 - **Your Garmin password is never written to disk.** It is posted straight to Garmin's sign-in flow, held in memory only for the length of that request, and discarded. Only the resulting session tokens are stored.
-- **The web UI binds to `127.0.0.1` by default.** It is not reachable from your network. There is a Host-header allowlist on top of that to defeat DNS rebinding, and API requests require a custom header that browsers refuse to send cross-origin. The Docker image binds `0.0.0.0` inside the container so the port mapping works — publish it to `127.0.0.1` as shown and the result is the same. If you deliberately want LAN access, put a reverse proxy in front of it and add your own authentication.
+- **The web UI binds to `127.0.0.1` by default.** It is not reachable from your network. There is a Host-header allowlist on top of that to defeat DNS rebinding, and API requests require a custom header that browsers refuse to send cross-origin. The Docker image binds `0.0.0.0` inside the container so the port mapping works — publish it to `127.0.0.1` as shown and the result is the same. Opening it through any other hostname gets a `403 forbidden_host` on purpose. If you want it on a hostname of your own, see [Behind a reverse proxy](#behind-a-reverse-proxy): it takes `--public-url` and authentication at the proxy.
 - **There is no login on the UI itself.** On a computer you share with other people, anyone with a local session can open the dashboard, see your measurements and trigger or disconnect syncs (they can never read your tokens or secrets through it). If that matters to you, an optional UI password is on the roadmap — until then, treat the app like any other per-user tool on a shared machine.
 - **The browser makes zero external requests.** No CDN, no fonts, no analytics, no error reporting. The UI is HTML, CSS and vanilla JavaScript embedded in the binary.
 - **The update check is opt-in and off by default.** When enabled, the binary itself (not your browser) asks the GitHub releases API once a day whether a newer version exists. Leave it off and nothing ever phones home.
@@ -212,8 +233,9 @@ This project is not affiliated with, endorsed by, or supported by Garmin or With
 | --- | --- |
 | `--config <dir>` | Use a different directory for `state.json`. `install` bakes the resolved absolute path into the service definition. |
 | `--bind <addr>` | Address the web UI listens on (default `127.0.0.1`). The Docker image uses `0.0.0.0` so the port mapping works. The UI has no login — bind another address only behind a firewall or a container port mapping. |
+| `--public-url <url>` | The origin your reverse proxy serves the UI at, e.g. `https://scale.example.com`; also read from `SCALEBRIDGE_PUBLIC_URL`. Accepts that Host header and makes the Withings callback URL `<url>/callback`. The UI still has no login — see [Behind a reverse proxy](#behind-a-reverse-proxy). `install` bakes it into the service definition. |
 
-The port lives in Settings, not on the command line, because it is not just a local choice: it is part of the callback URL you registered with Withings (`http://localhost:8723/callback`). The Settings page has a guided flow that updates the Withings portal and the app in the right order.
+The port lives in Settings, not on the command line, because it is not just a local choice: it is part of the callback URL you registered with Withings (`http://localhost:8723/callback`). The Settings page has a guided flow that updates the Withings portal and the app in the right order. With `--public-url` the callback URL is the public origin instead, so the port only matters to your proxy.
 
 ## Contributing
 

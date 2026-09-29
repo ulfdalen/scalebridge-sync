@@ -6,6 +6,7 @@ package webui
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime"
 	"net"
@@ -23,11 +24,12 @@ const maxBody = 1 << 20
 const csrfHeader = "X-ScaleBridge-Local"
 
 // The DNS-rebinding defense: an attacker's domain resolving to 127.0.0.1 still
-// arrives with its own Host header.
+// arrives with its own Host header. With --public-url the proxy's origin is the
+// one other name accepted, so the proxy has to forward Host unchanged.
 func (s *Server) hostAllowlist(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.allowedHost(r.Host) {
-			writeErr(w, http.StatusForbidden, "forbidden_host", "unexpected Host header")
+			writeErr(w, http.StatusForbidden, "forbidden_host", fmt.Sprintf("unexpected Host header %q", r.Host))
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -35,6 +37,10 @@ func (s *Server) hostAllowlist(next http.Handler) http.Handler {
 }
 
 func (s *Server) allowedHost(host string) bool {
+	return s.localHost(host) || s.publicHost(host)
+}
+
+func (s *Server) localHost(host string) bool {
 	if host == "" {
 		return false
 	}
@@ -51,6 +57,53 @@ func (s *Server) allowedHost(host string) bool {
 		return true
 	}
 	return false
+}
+
+// publicHost matches the --public-url origin: the same hostname, on the port
+// the URL implies. Browsers omit the port when it is the scheme's default.
+func (s *Server) publicHost(host string) bool {
+	if s.public == nil || host == "" {
+		return false
+	}
+	name, port, err := net.SplitHostPort(host)
+	if err != nil {
+		name, port = host, ""
+	}
+	if !asciiEqualFold(strings.Trim(name, "[]"), s.public.Hostname()) {
+		return false
+	}
+	return portOrDefault(port, s.public.Scheme) == portOrDefault(s.public.Port(), s.public.Scheme)
+}
+
+// asciiEqualFold is strings.EqualFold without Unicode folding: hostnames are
+// ASCII on the wire (punycode), and EqualFold would let U+017F match "s".
+func asciiEqualFold(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		ca, cb := a[i], b[i]
+		if 'A' <= ca && ca <= 'Z' {
+			ca += 'a' - 'A'
+		}
+		if 'A' <= cb && cb <= 'Z' {
+			cb += 'a' - 'A'
+		}
+		if ca != cb {
+			return false
+		}
+	}
+	return true
+}
+
+func portOrDefault(port, scheme string) string {
+	if port != "" {
+		return port
+	}
+	if scheme == "https" {
+		return "443"
+	}
+	return "80"
 }
 
 func securityHeaders(next http.Handler) http.Handler {
@@ -86,7 +139,7 @@ func (s *Server) csrf(next http.Handler) http.Handler {
 			return
 		}
 		if origin := r.Header.Get("Origin"); origin != "" && !s.allowedOrigin(origin) {
-			writeErr(w, http.StatusForbidden, "csrf", "cross-origin request")
+			writeErr(w, http.StatusForbidden, "csrf", fmt.Sprintf("cross-origin request from %q", origin))
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -95,10 +148,13 @@ func (s *Server) csrf(next http.Handler) http.Handler {
 
 func (s *Server) allowedOrigin(origin string) bool {
 	u, err := url.Parse(origin)
-	if err != nil || u.Scheme != "http" {
+	if err != nil {
 		return false
 	}
-	return s.allowedHost(u.Host)
+	if u.Scheme == "http" && s.localHost(u.Host) {
+		return true
+	}
+	return s.public != nil && u.Scheme == s.public.Scheme && s.publicHost(u.Host)
 }
 
 func isJSON(contentType string) bool {

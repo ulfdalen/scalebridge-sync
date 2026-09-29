@@ -1,7 +1,8 @@
 # Local HTTP API contract
 
-Server binds `127.0.0.1:<port>` (default 8723). This file is the single source of truth for
-the JSON API — the static UI (`static/*.js`) and the Go handlers must both match it exactly.
+Server binds `127.0.0.1:<port>` (default 8723); with `--public-url` it also answers to that
+origin through a reverse proxy. This file is the single source of truth for the JSON API — the
+static UI (`static/*.js`) and the Go handlers must both match it exactly.
 
 ## Conventions
 
@@ -9,7 +10,11 @@ the JSON API — the static UI (`static/*.js`) and the Go handlers must both mat
 - Errors: HTTP status + `{"error": "snake_code", "detail": "human-readable, optional"}`.
 - CSRF: every non-GET request MUST carry header `X-ScaleBridge-Local: 1`; requests with a
   body MUST be `Content-Type: application/json`. Otherwise 403 `{"error":"csrf"}`.
-- Host header must be `localhost:<port>`, `127.0.0.1:<port>` or `[::1]:<port>`, else 403.
+- Host header must be `localhost:<port>`, `127.0.0.1:<port>` or `[::1]:<port>` — or, with
+  `--public-url`, that URL's host with its explicit port (none when it is the scheme default) —
+  else 403 `{"error":"forbidden_host"}`. The Origin check on non-GET requests accepts
+  `http://<local name>:<port>` and, with `--public-url`, exactly that origin: same scheme, same
+  host and port rule.
 - Timestamps are RFC3339 strings; absent/never values are `null`.
 
 ## Pages
@@ -47,6 +52,7 @@ GET /static/*    embedded assets
 {
   "port": 8723,
   "callback_url": "http://localhost:8723/callback",
+  "public_url": "",
   "client_id": "abc123…",
   "client_secret_set": true,
   "steps": {"withings_creds": true, "withings_oauth": false, "garmin": false, "backfill": false},
@@ -54,7 +60,9 @@ GET /static/*    embedded assets
   "last_oauth_detail": ""
 }
 ```
-Never contains the client secret. `last_oauth_error` values: `""`, `"denied"`, `"state_mismatch"`,
+Never contains the client secret. `public_url` is the `--public-url` origin or `""`; when set,
+`callback_url` is `<public_url>/callback` and the Settings port flow leaves the callback URL
+alone. `last_oauth_error` values: `""`, `"denied"`, `"state_mismatch"`,
 `"exchange_failed"`; `last_oauth_detail` carries the human-readable text (the Withings client's
 already-redacted error string). Both are in-memory wizard state, reset by a restart.
 

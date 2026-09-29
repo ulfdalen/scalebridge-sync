@@ -26,6 +26,8 @@ async function init() {
 
   show(qs('#app'), true);
   await Promise.all([loadSettings(), loadSetupState(), loadStatus()]);
+  // The port modal reads setup state, so it waits for it.
+  qs('#port-change').disabled = false;
 
   if (window.location.hash === '#withings') {
     qs('#creds-disclose').open = true;
@@ -62,6 +64,10 @@ async function loadSetupState() {
   clear(holder);
   holder.appendChild(copyBox(url));
   creds.load(setupState);
+
+  const behindProxy = !!setupState.public_url;
+  qsa('[data-local-only]').forEach(function (n) { show(n, !behindProxy); });
+  qsa('[data-public-only]').forEach(function (n) { show(n, behindProxy); });
 }
 
 async function loadStatus() {
@@ -231,10 +237,16 @@ async function onCheckNow() {
 
 /* ── port change: two steps, because Withings must know the new callback URL first ── */
 function openPortModal() {
-  const shell = modalShell('Change the port', 'Two steps — the portal first, then this app', { wide: true });
+  // Behind a reverse proxy the callback URL is the public origin: the port only
+  // matters to the proxy, Withings needs no update, and the change is one step.
+  const behindProxy = !!setupState.public_url;
+  const shell = modalShell('Change the port',
+    behindProxy ? 'Takes effect on restart — then repoint your proxy' : 'Two steps — the portal first, then this app',
+    { wide: true });
 
   const portInput = el('input', { class: 'input mono', type: 'number', min: String(MIN_PORT), max: String(MAX_PORT), step: '1' });
   portInput.value = String(settings.port);
+  const portField = el('label', { class: 'field' }, [el('span', { class: 'label', text: 'New port' }), portInput]);
   const urlHolder = el('div');
   const hint = el('div', { class: 'hint hidden' });
 
@@ -246,7 +258,11 @@ function openPortModal() {
   portInput.addEventListener('input', function () { show(hint, false); repaintUrl(); });
   repaintUrl();
 
-  const stepOne = el('div', { class: 'stack-sm' }, [
+  const stepOne = el('div', { class: 'stack-sm' }, behindProxy ? [
+    el('div', { class: 'banner banner-plain' }, el('div', { text: 'The callback URL Withings knows is your public URL, so it does not change. After the restart, point your reverse proxy at the new port.' })),
+    portField,
+    hint,
+  ] : [
     el('div', { class: 'banner banner-amber' }, [
       icon('alert', 'banner-icon'),
       el('div', {}, [
@@ -254,7 +270,7 @@ function openPortModal() {
         'Change the Callback URI on your Withings application to the URL below, save it there, and only then apply the change here. Doing it the other way round leaves the connection broken until the portal catches up.',
       ]),
     ]),
-    el('label', { class: 'field' }, [el('span', { class: 'label', text: 'New port' }), portInput]),
+    portField,
     el('div', { class: 'stack-xs' }, [
       el('span', { class: 'label', text: 'The callback URL to register' }),
       urlHolder,
@@ -277,7 +293,7 @@ function openPortModal() {
   appendKids(shell.body, [stepOne, stepTwo]);
 
   const cancel = el('button', { class: 'btn btn-secondary', type: 'button', text: 'Cancel' });
-  const next = el('button', { class: 'btn btn-accent', type: 'button', text: 'Next' });
+  const next = el('button', { class: 'btn btn-accent', type: 'button', text: behindProxy ? 'Apply' : 'Next' });
   const back = el('button', { class: 'btn btn-secondary hidden', type: 'button', text: 'Back' });
   const apply = el('button', { class: 'btn btn-danger-solid hidden', type: 'button', text: "I've updated the portal — apply" });
   appendKids(shell.foot, [cancel, back, next, apply]);
@@ -286,21 +302,44 @@ function openPortModal() {
   shell.closeBtn.addEventListener('click', m.close);
   cancel.addEventListener('click', m.close);
 
-  next.addEventListener('click', function () {
+  function validPort() {
     const port = Number(portInput.value);
     if (!Number.isInteger(port) || port < MIN_PORT || port > MAX_PORT) {
       hint.textContent = 'Pick a whole number between ' + MIN_PORT + ' and ' + MAX_PORT + '.';
       hint.className = 'hint hint-err';
       show(hint, true);
       portInput.focus();
-      return;
+      return false;
     }
     if (port === settings.port) {
       hint.textContent = 'That is already the port in use.';
       hint.className = 'hint hint-warn';
       show(hint, true);
-      return;
+      return false;
     }
+    return true;
+  }
+
+  async function applyPort(btn) {
+    const port = Number(portInput.value);
+    setBusy(btn, true, 'Applying…');
+    try {
+      const res = await api('/api/settings', { method: 'PUT', body: { port: port } });
+      settings.port = port;
+      qs('#port-current').textContent = 'localhost:' + port;
+      m.close();
+      if (res.restart_required !== false) show(qs('#restart-banner'), true);
+      toast('Port saved — restart to use it', 'warn');
+      loadSetupState();
+    } catch (err) {
+      toast(err.detail || 'Could not change the port: ' + err.code, 'err');
+      setBusy(btn, false);
+    }
+  }
+
+  next.addEventListener('click', function () {
+    if (!validPort()) return;
+    if (behindProxy) { applyPort(next); return; }
     qs('#port-confirm-url', stepTwo).textContent = futureUrl();
     show(stepOne, false); show(stepTwo, true);
     show(next, false); show(cancel, false);
@@ -313,20 +352,5 @@ function openPortModal() {
     show(next, true); show(cancel, true);
   });
 
-  apply.addEventListener('click', async function () {
-    const port = Number(portInput.value);
-    setBusy(apply, true, 'Applying…');
-    try {
-      const res = await api('/api/settings', { method: 'PUT', body: { port: port } });
-      settings.port = port;
-      qs('#port-current').textContent = 'localhost:' + port;
-      m.close();
-      if (res.restart_required !== false) show(qs('#restart-banner'), true);
-      toast('Port saved — restart to use it', 'warn');
-      loadSetupState();
-    } catch (err) {
-      toast(err.detail || 'Could not change the port: ' + err.code, 'err');
-      setBusy(apply, false);
-    }
-  });
+  apply.addEventListener('click', function () { applyPort(apply); });
 }

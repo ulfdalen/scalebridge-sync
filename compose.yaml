@@ -11,6 +11,10 @@ services:
       - "127.0.0.1:8723:8723"
     volumes:
       - scalebridge-sync:/data
+    # Serving it on a domain through your own reverse proxy? Read DOCS.md
+    # "Behind a reverse proxy" first - the UI has no login - then uncomment:
+    # environment:
+    #   SCALEBRIDGE_PUBLIC_URL: https://scale.example.com
 
 volumes:
   scalebridge-sync:

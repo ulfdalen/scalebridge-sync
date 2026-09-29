@@ -12,12 +12,15 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kardianos/service"
 
@@ -49,6 +52,7 @@ func run(argv []string) int {
 	fs.Usage = func() { usage(os.Stderr, defaultDir) }
 	configDir := fs.String("config", defaultDir, "configuration directory")
 	bindAddr := fs.String("bind", "127.0.0.1", "address the web UI listens on")
+	publicURL := fs.String("public-url", os.Getenv("SCALEBRIDGE_PUBLIC_URL"), "origin a reverse proxy serves the UI at")
 	if err := fs.Parse(argv); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			usage(os.Stdout, defaultDir)
@@ -69,19 +73,28 @@ func run(argv []string) int {
 		fmt.Fprintf(os.Stderr, "resolve --config %s: %v\n", *configDir, err)
 		return 1
 	}
-
 	switch cmd {
 	case "", "run":
+		public, err := parsePublicURL(*publicURL)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
 		// Under launchd/systemd/SCM there is no terminal and no signal handling
 		// of our own: kardianos drives start/stop instead.
 		if !service.Interactive() {
-			return runUnderServiceManager(dir)
+			return runUnderServiceManager(dir, public)
 		}
-		return cmdRun(dir, *bindAddr)
+		return cmdRun(dir, *bindAddr, public)
 	case "sync":
 		return cmdSync(dir)
 	case "install":
-		return cmdInstall(dir)
+		public, err := parsePublicURL(*publicURL)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		return cmdInstall(dir, public)
 	case "uninstall":
 		return cmdUninstall(dir)
 	case "start", "stop":
@@ -129,6 +142,12 @@ Flags:
   --bind <addr>    address the web UI listens on (default 127.0.0.1; the UI has
                    no login, so bind another address only behind a firewall or
                    a container port mapping)
+  --public-url <url>
+                   origin your reverse proxy serves the UI at, for example
+                   https://scale.example.com (env: SCALEBRIDGE_PUBLIC_URL).
+                   Accepts that Host, and makes the Withings callback URL
+                   <url>/callback. There is still no login: the proxy must
+                   add one. See DOCS.md, "Behind a reverse proxy".
 `, defaultDir)
 }
 
@@ -161,7 +180,7 @@ func openStore(dir string) (*store.Store, int, error) {
 	return st, port, nil
 }
 
-func newApp(dir, bind string) (*app, error) {
+func newApp(dir, bind string, public *url.URL) (*app, error) {
 	st, port, err := openStore(dir)
 	if err != nil {
 		return nil, err
@@ -170,7 +189,7 @@ func newApp(dir, bind string) (*app, error) {
 	return &app{
 		st:   st,
 		sy:   sy,
-		srv:  &http.Server{Handler: webui.New(st, sy, version).Handler()},
+		srv:  &http.Server{Handler: webui.New(st, sy, version, public).Handler()},
 		bind: bind,
 		port: port,
 		url:  localURL(port),
@@ -178,6 +197,58 @@ func newApp(dir, bind string) (*app, error) {
 }
 
 func localURL(port int) string { return fmt.Sprintf("http://localhost:%d", port) }
+
+// parsePublicURL validates --public-url (or SCALEBRIDGE_PUBLIC_URL): an
+// origin and nothing else, so that "<url>/callback" is exactly the string the
+// user registers at Withings. The result is normalized the way browsers write
+// an origin: lowercase host, no scheme-default port, no trailing slash.
+func parsePublicURL(raw string) (*url.URL, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	const flag = "--public-url (or SCALEBRIDGE_PUBLIC_URL)"
+	if !strings.Contains(raw, "://") {
+		return nil, fmt.Errorf("%s %q must start with http:// or https://", flag, raw)
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %v", flag, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("%s %q must start with http:// or https://", flag, raw)
+	}
+	host := u.Hostname()
+	if host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return nil, fmt.Errorf("%s %q must be an origin like https://scale.example.com", flag, raw)
+	}
+	if strings.TrimSuffix(u.Path, "/") != "" {
+		return nil, fmt.Errorf("%s %q must not have a path: the UI is served at the root", flag, raw)
+	}
+	for i := 0; i < len(host); i++ {
+		// url.URL would percent-escape a Unicode host, and browsers send punycode.
+		if host[i] >= utf8.RuneSelf {
+			return nil, fmt.Errorf("%s %q: write the hostname in its punycode (xn--) form", flag, raw)
+		}
+	}
+	host = strings.ToLower(host)
+	port := u.Port()
+	if port != "" {
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+			return nil, fmt.Errorf("%s %q has an invalid port", flag, raw)
+		}
+		if (port == "80" && u.Scheme == "http") || (port == "443" && u.Scheme == "https") {
+			port = ""
+		}
+	}
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if port != "" {
+		host += ":" + port
+	}
+	return &url.URL{Scheme: u.Scheme, Host: host}, nil
+}
 
 // Something is already listening on our port - almost always another copy of
 // this binary.
@@ -225,8 +296,8 @@ func (a *app) stop() {
 
 // ── run ──
 
-func cmdRun(dir, bind string) int {
-	a, err := newApp(dir, bind)
+func cmdRun(dir, bind string, public *url.URL) int {
+	a, err := newApp(dir, bind, public)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -242,6 +313,7 @@ func cmdRun(dir, bind string) int {
 	}
 
 	fmt.Printf("ScaleBridge Sync %s -> %s\n", version, a.url)
+	warnPublic(public)
 	a.start()
 
 	// Only nudge a human at a terminal, and only into an unfinished wizard.
@@ -263,6 +335,23 @@ func cmdRun(dir, bind string) int {
 		a.stop()
 	}
 	return 0
+}
+
+// warnPublic runs on every start with --public-url, foreground or service:
+// the flag gives up the localhost-only guarantee and nothing in the app
+// stands in for it.
+func warnPublic(public *url.URL) {
+	if public == nil {
+		return
+	}
+	fmt.Printf("Withings callback URL: %s/callback\n", public)
+	fmt.Fprintf(os.Stderr, "WARNING: the UI is also served at %s and has no login. Anyone who reaches\n"+
+		"that address can see your measurements and disconnect or re-link your accounts.\n"+
+		"Only run it this way behind a reverse proxy that authenticates - see DOCS.md.\n", public)
+	if h := public.Hostname(); public.Scheme == "http" && h != "localhost" && !net.ParseIP(h).IsLoopback() {
+		fmt.Fprintln(os.Stderr, "WARNING: --public-url is http://, so the Garmin password and Withings secret typed\n"+
+			"into the UI cross the network unencrypted. Terminate TLS at the proxy and use https://.")
+	}
 }
 
 // ── sync ──
@@ -399,9 +488,9 @@ func cmdOpen(dir string) int {
 
 // ── helpers ──
 
-func browse(url string) {
-	if err := openBrowser(url); err != nil {
-		fmt.Printf("could not open a browser (%v) - open %s yourself\n", err, url)
+func browse(target string) {
+	if err := openBrowser(target); err != nil {
+		fmt.Printf("could not open a browser (%v) - open %s yourself\n", err, target)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -32,13 +33,28 @@ type harness struct {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
+	return newHarnessWith(t, nil)
+}
+
+// newHarnessWith builds a server as --public-url would.
+func newHarnessWith(t *testing.T, public *url.URL) *harness {
+	t.Helper()
 	st, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	sy := syncer.New(st)
-	s := New(st, sy, "1.2.3")
+	s := New(st, sy, "1.2.3", public)
 	return &harness{t: t, s: s, sy: sy, h: s.Handler()}
+}
+
+func mustURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
 }
 
 // Builds a request that passes the middleware: right Host, CSRF header on
@@ -136,6 +152,121 @@ func TestHostAllowlist(t *testing.T) {
 		if rec := h.do(r); rec.Code != http.StatusOK {
 			t.Fatalf("GET /api/status with Host %q: status %d, want 200", host, rec.Code)
 		}
+	}
+}
+
+// ── --public-url ──────────────────────────────────────
+
+func TestPublicURLHostAllowlist(t *testing.T) {
+	// Without the flag the public names mean nothing.
+	h := newHarness(t)
+	r := h.req(http.MethodGet, "/api/status", nil)
+	r.Host = "scale.example.com"
+	if rec := h.do(r); rec.Code != http.StatusForbidden {
+		t.Fatalf("flag unset, Host scale.example.com: status %d, want 403", rec.Code)
+	}
+	r = h.req(http.MethodPost, "/api/withings/disconnect", map[string]any{})
+	r.Header.Set("Origin", "https://scale.example.com")
+	if rec := h.do(r); rec.Code != http.StatusForbidden {
+		t.Fatalf("flag unset, Origin https://scale.example.com: status %d, want 403", rec.Code)
+	}
+
+	h = newHarnessWith(t, mustURL(t, "https://scale.example.com"))
+
+	for _, host := range []string{
+		"scale.example.com",
+		"scale.example.com:443",
+		"SCALE.example.com",
+		fmt.Sprintf("localhost:%d", testPort), // the local names keep working
+	} {
+		r := h.req(http.MethodGet, "/api/status", nil)
+		r.Host = host
+		if rec := h.do(r); rec.Code != http.StatusOK {
+			t.Fatalf("GET /api/status with Host %q: status %d, want 200", host, rec.Code)
+		}
+	}
+	for _, host := range []string{
+		"scale.example.com:8723",
+		"evil.example.com",
+		"scale.example.com.evil.net",
+		"localhost",
+	} {
+		r := h.req(http.MethodGet, "/api/status", nil)
+		r.Host = host
+		if rec := h.do(r); rec.Code != http.StatusForbidden {
+			t.Fatalf("GET /api/status with Host %q: status %d, want 403", host, rec.Code)
+		}
+	}
+
+	// An explicit non-default port has to be sent as-is.
+	h = newHarnessWith(t, mustURL(t, "http://nas.local:8080"))
+	for host, want := range map[string]int{"nas.local:8080": 200, "nas.local": 403, "nas.local:80": 403} {
+		r := h.req(http.MethodGet, "/api/status", nil)
+		r.Host = host
+		if rec := h.do(r); rec.Code != want {
+			t.Fatalf("GET /api/status with Host %q: status %d, want %d", host, rec.Code, want)
+		}
+	}
+
+	// IPv6 literals keep their brackets in Host but not in url.Hostname().
+	h = newHarnessWith(t, mustURL(t, "https://[::1]:8443"))
+	for host, want := range map[string]int{"[::1]:8443": 200, "[::1]": 403, "[::1]:443": 403} {
+		r := h.req(http.MethodGet, "/api/status", nil)
+		r.Host = host
+		if rec := h.do(r); rec.Code != want {
+			t.Fatalf("GET /api/status with Host %q: status %d, want %d", host, rec.Code, want)
+		}
+	}
+}
+
+func TestPublicURLOrigin(t *testing.T) {
+	h := newHarnessWith(t, mustURL(t, "https://scale.example.com"))
+
+	for origin, want := range map[string]int{
+		"https://scale.example.com":      http.StatusOK,
+		"https://scale.example.com:443":  http.StatusOK,
+		"http://scale.example.com":       http.StatusForbidden, // the scheme is part of the origin
+		"https://scale.example.com:8443": http.StatusForbidden,
+		"https://evil.example.com":       http.StatusForbidden,
+		"null":                           http.StatusForbidden,
+		"http://localhost:8723":          http.StatusOK, // the local origin keeps working
+		"https://localhost:8723":         http.StatusForbidden,
+	} {
+		r := h.req(http.MethodPost, "/api/withings/disconnect", map[string]any{})
+		r.Host = "scale.example.com"
+		r.Header.Set("Origin", origin)
+		if rec := h.do(r); rec.Code != want {
+			t.Fatalf("POST with Origin %q: status %d, want %d", origin, rec.Code, want)
+		}
+	}
+}
+
+func TestPublicURLCallback(t *testing.T) {
+	h := newHarnessWith(t, mustURL(t, "https://scale.example.com"))
+
+	rec := h.call(http.MethodGet, "/api/setup/state", nil)
+	var state struct {
+		CallbackURL string `json:"callback_url"`
+		PublicURL   string `json:"public_url"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.CallbackURL != "https://scale.example.com/callback" || state.PublicURL != "https://scale.example.com" {
+		t.Fatalf("setup state = %+v", state)
+	}
+
+	h.setCreds("client-id-1", "secret-1")
+	rec = h.call(http.MethodGet, "/api/withings/connect", nil)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("connect: status %d, want 302", rec.Code)
+	}
+	u, err := url.Parse(rec.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u.Query().Get("redirect_uri"); got != "https://scale.example.com/callback" {
+		t.Fatalf("redirect_uri = %q", got)
 	}
 }
 

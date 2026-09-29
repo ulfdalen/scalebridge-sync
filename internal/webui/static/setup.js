@@ -38,7 +38,6 @@ function buildStaticCopyBoxes() {
   qs('#copy-app-name').appendChild(copyBox(APP_NAME_SUGGESTION));
   qs('#copy-app-desc').appendChild(copyBox(APP_DESC_SUGGESTION));
   qs('#copy-origin').appendChild(copyBox(window.location.origin));
-  qs('#copy-install').appendChild(copyBox(INSTALL_COMMAND));
 }
 
 function buildComponents() {
@@ -160,6 +159,8 @@ function applyState() {
 function applyDynamicText() {
   const url = setupState.callback_url || (window.location.origin + '/callback');
   const port = setupState.port || window.location.port || '8723';
+  // Behind a reverse proxy (--public-url) the localhost-specific copy is wrong.
+  const behindProxy = !!setupState.public_url;
 
   const holder = qs('#copy-callback');
   if (holder.dataset.url !== url) {
@@ -169,6 +170,19 @@ function applyDynamicText() {
   }
   qs('#cb-port').textContent = ':' + port;
   qs('#mock-callback').textContent = url;
+  qs('#mock-callback-short').textContent = url.replace(/^https?:\/\//, '').replace(/\/callback$/, '');
+
+  // `install` bakes --public-url into the service the way it bakes --config.
+  const cmd = INSTALL_COMMAND + (behindProxy ? ' --public-url ' + setupState.public_url : '');
+  const box = qs('#copy-install');
+  if (box.dataset.cmd !== cmd) {
+    box.dataset.cmd = cmd;
+    clear(box);
+    box.appendChild(copyBox(cmd));
+  }
+
+  qsa('[data-local-only]').forEach(function (n) { show(n, !behindProxy); });
+  qsa('[data-public-only]').forEach(function (n) { show(n, behindProxy); });
 }
 
 /* ── step 2: accordion ── */

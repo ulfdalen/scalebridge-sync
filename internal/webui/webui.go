@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"html/template"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -43,6 +44,11 @@ type Server struct {
 	// Host allowlist and callback URL must agree on the port we are bound to.
 	port int
 
+	// From --public-url: the reverse proxy's origin, accepted by the Host
+	// allowlist and the Origin check and used as the Withings callback base.
+	// nil for the default localhost-only server.
+	public *url.URL
+
 	mu              sync.Mutex
 	oauthStates     map[string]time.Time
 	mfa             map[string]*pendingMFA
@@ -53,12 +59,13 @@ type Server struct {
 	updateAt        time.Time
 }
 
-func New(st *store.Store, sy *syncer.Syncer, version string) *Server {
+func New(st *store.Store, sy *syncer.Syncer, version string, public *url.URL) *Server {
 	s := &Server{
 		st:          st,
 		sy:          sy,
 		version:     version,
 		port:        defaultPort,
+		public:      public,
 		oauthStates: make(map[string]time.Time),
 		mfa:         make(map[string]*pendingMFA),
 	}

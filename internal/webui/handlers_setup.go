@@ -22,6 +22,7 @@ type setupSteps struct {
 type setupState struct {
 	Port            int        `json:"port"`
 	CallbackURL     string     `json:"callback_url"`
+	PublicURL       string     `json:"public_url"`
 	ClientID        string     `json:"client_id"`
 	ClientSecretSet bool       `json:"client_secret_set"`
 	Steps           setupSteps `json:"steps"`
@@ -30,13 +31,20 @@ type setupState struct {
 }
 
 // The exact string the user registered at Withings, built from the bound port
-// and never from the Host header: a mismatch is the most common setup failure.
+// (or the --public-url origin) and never from the Host header: a mismatch is
+// the most common setup failure.
 func (s *Server) callbackURL() string {
+	if s.public != nil {
+		return s.public.String() + "/callback"
+	}
 	return fmt.Sprintf("http://localhost:%d/callback", s.port)
 }
 
 func (s *Server) handleSetupState(w http.ResponseWriter, r *http.Request) {
 	out := setupState{Port: s.port, CallbackURL: s.callbackURL()}
+	if s.public != nil {
+		out.PublicURL = s.public.String()
+	}
 
 	_ = s.sy.Do(func(st *store.Store) error {
 		wi, g := st.State.Withings, st.State.Garmin

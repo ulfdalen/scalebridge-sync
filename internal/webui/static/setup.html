@@ -221,9 +221,10 @@
           </p>
           <div id="copy-callback"></div>
           <ul class="checklist">
-            <li><span class="ck"></span><span><code>http</code>, not <code>https</code> — this address is on your own machine, so there is no certificate.</span></li>
-            <li><span class="ck"></span><span><code>localhost</code>, not <code>127.0.0.1</code> — Withings treats them as different strings.</span></li>
-            <li><span class="ck"></span><span>It includes the port, <code id="cb-port">:8723</code>. Dropping it is the second most common mistake.</span></li>
+            <li data-local-only><span class="ck"></span><span><code>http</code>, not <code>https</code> — this address is on your own machine, so there is no certificate.</span></li>
+            <li data-local-only><span class="ck"></span><span><code>localhost</code>, not <code>127.0.0.1</code> — Withings treats them as different strings.</span></li>
+            <li data-local-only><span class="ck"></span><span>It includes the port, <code id="cb-port">:8723</code>. Dropping it is the second most common mistake.</span></li>
+            <li data-public-only class="hidden"><span class="ck"></span><span>It is the address this app was started with (<code>--public-url</code>) plus <code>/callback</code> — <code>https</code> included, if that is how your reverse proxy serves it.</span></li>
             <li><span class="ck"></span><span>It ends in <code>/callback</code>.</span></li>
             <li><span class="ck"></span><span>No trailing slash after <code>callback</code>.</span></li>
             <li><span class="ck"></span><span><strong>Paste it — don't type it.</strong> One transposed character and Withings will refuse to send you back.</span></li>
@@ -286,7 +287,7 @@
               <div class="mock-list">
                 <div class="mock-row hl"><span class="mr-key"></span>Client ID<span class="mr-val">a1b2c3d4…</span></div>
                 <div class="mock-row hl"><span class="mr-key"></span>Client Secret<span class="mr-val">••••••••••</span></div>
-                <div class="mock-row"><span class="mr-key"></span>Callback URI<span class="mr-val">localhost:8723</span></div>
+                <div class="mock-row"><span class="mr-key"></span>Callback URI<span class="mr-val" id="mock-callback-short">localhost:8723</span></div>
               </div>
             </div>
             <div class="mock-caption">A sketch, not a screenshot — wording may vary.</div>
@@ -465,8 +466,12 @@
 
       <div class="card card-pad stack-sm">
         <div class="title">Bookmark this address</div>
-        <p class="body-sm">
+        <p class="body-sm" data-local-only>
           The dashboard lives here, on this computer. Nothing on the internet can reach it.
+        </p>
+        <p class="body-sm hidden" data-public-only>
+          The dashboard lives here, behind your reverse proxy. Keep the proxy's login in
+          front of it — this app has none of its own.
         </p>
         <div id="copy-origin"></div>
       </div>

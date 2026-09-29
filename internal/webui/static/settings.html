@@ -41,7 +41,7 @@
       <strong>Restart needed.</strong> The port change is saved but only takes effect
       when scalebridge-sync starts again. Quit the app and start it, or run
       <code>scalebridge-sync stop</code> then <code>scalebridge-sync start</code> if you
-      installed it as a service. Afterwards the dashboard lives at the new address.
+      installed it as a service. <span data-local-only>Afterwards the dashboard lives at the new address.</span>
     </div>
   </div>
 
@@ -149,13 +149,16 @@
     <div class="card-head"><span class="title grow">Change the port</span></div>
     <div class="card-body stack-sm">
       <p class="body-sm">
-        This app listens on <span class="mono strong" id="port-current">—</span>. The port is
-        baked into the callback URL your Withings application knows, so changing it here
-        <strong>breaks the Withings connection until you update the portal to match</strong>.
+        This app listens on <span class="mono strong" id="port-current">—</span>.
+        <span data-local-only>The port is baked into the callback URL your Withings application
+        knows, so changing it here <strong>breaks the Withings connection until you update the
+        portal to match</strong>.</span>
+        <span class="hidden" data-public-only>Behind your reverse proxy the callback URL does not
+        depend on it; after the restart, point the proxy at the new port.</span>
         Only worth doing if something else on this computer wants the same port.
       </p>
       <div class="row row-wrap">
-        <button class="btn btn-danger btn-sm" type="button" id="port-change">Change port…</button>
+        <button class="btn btn-danger btn-sm" type="button" id="port-change" disabled>Change port…</button>
       </div>
     </div>
   </div>
