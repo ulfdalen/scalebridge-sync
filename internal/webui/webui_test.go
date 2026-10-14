@@ -697,6 +697,33 @@ func TestMeasurementsNewestFirst(t *testing.T) {
 	}
 }
 
+func TestMeasurementsDeriveHydration(t *testing.T) {
+	h := newHarness(t)
+	at := time.Date(2026, 10, 14, 7, 0, 0, 0, time.UTC)
+	water, heavy := 42.0, 80.0
+	h.state(func(st *store.State) {
+		st.Recent = append(st.Recent,
+			store.Measurement{GroupID: 1, MeasuredAt: at, WeightKG: 70, WaterMassKG: &heavy},
+			store.Measurement{GroupID: 2, MeasuredAt: at.Add(time.Hour), WeightKG: 70, WaterMassKG: &water},
+		)
+	})
+
+	items := h.callWant(http.MethodGet, "/api/measurements", nil, http.StatusOK)["items"].([]any)
+	newest, oldest := items[0].(map[string]any), items[1].(map[string]any)
+	// 42 kg of water at 70 kg is 60 %, from the same weigh-in.
+	if got, ok := newest["hydration_pct"].(float64); !ok || got < 59.999 || got > 60.001 {
+		t.Fatalf("hydration_pct = %v, want 60", newest["hydration_pct"])
+	}
+	if v, ok := oldest["hydration_pct"]; !ok || v != nil {
+		t.Fatalf("water above weight: hydration_pct = %v (present=%v), want null", v, ok)
+	}
+	for i, it := range items {
+		if v, ok := it.(map[string]any)["bmi"]; !ok || v != nil {
+			t.Fatalf("item %d bmi = %v (present=%v), want present and always null", i, v, ok)
+		}
+	}
+}
+
 func TestEvents(t *testing.T) {
 	h := newHarness(t)
 	out := h.callWant(http.MethodGet, "/api/events", nil, http.StatusOK)

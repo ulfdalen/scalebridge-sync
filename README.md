@@ -25,6 +25,10 @@ Docker Desktop users can skip the terminal: the [image on Docker Hub](https://hu
 
 **3. Done.** Step on the scale — the weigh-in appears in Garmin Connect within minutes: weight, body fat, muscle mass, bone mass, hydration, visceral fat, basal metabolic rate and metabolic age — whatever your scale reports. The container keeps syncing in the background and survives reboots.
 
+## Withings API plans
+
+Your personal Withings app runs on Withings' free API plan. If that plan doesn't include visceral fat, basal metabolic rate or metabolic age, scalebridge-sync syncs everything else and says so once in the event log. Withings accounts created after 12 October 2026 also need a Withings+ membership to share data with a free-plan app. That's Withings' rule, not this project's. Details in [Troubleshooting](DOCS.md#troubleshooting).
+
 ## Rather not keep a computer running?
 
 This app must be running for syncs to happen. If you'd rather not leave a machine on, [**ScaleBridge**](https://scalebridge.ulf.su) is the hosted version by the same author: the same sync engine running around the clock, connected in two minutes, with a free manual-sync tier and a small yearly fee for fully automatic sync. Self-host for free, or let [scalebridge.ulf.su](https://scalebridge.ulf.su) handle it — same engine either way.

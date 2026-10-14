@@ -86,8 +86,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 			BodyFatPct:        ptr(18.4),
 			MuscleKG:          ptr(60.1),
 			BoneKG:            ptr(3.2),
-			HydrationPct:      ptr(55.5),
-			BMI:               ptr(24.1),
+			WaterMassKG:       ptr(45.7),
 			VisceralFat:       ptr(8.0),
 			BMRKcal:           ptr(1685.5),
 			MetabolicAgeYears: ptr(34.0),
@@ -120,6 +119,53 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(reopened.State, want) {
 		t.Errorf("roundtrip mismatch\n got: %+v\nwant: %+v", reopened.State, want)
+	}
+}
+
+// Before v0.0.4, hydration_pct held Withings' water MASS in kilograms and bmi
+// an undocumented meastype. A file from then must load (schema 1 is unchanged),
+// must not surface either value, and must lose both on the next Save.
+func TestOpenDropsLegacyHydrationAndBMI(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "config")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{"schema_version": 1, "setup_complete": true,
+		"pending": [{"grpid": 7, "measured_at": "2026-10-01T06:30:00Z", "weight_kg": 70,
+			"body_fat_pct": 18.4, "hydration_pct": 42, "bmi": 24.1}]}`
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if len(s.State.Pending) != 1 {
+		t.Fatalf("pending = %+v, want the legacy entry", s.State.Pending)
+	}
+	m := s.State.Pending[0]
+	if m.WeightKG != 70 || m.BodyFatPct == nil || *m.BodyFatPct != 18.4 {
+		t.Errorf("legacy entry lost its other values: %+v", m)
+	}
+	if m.WaterMassKG != nil {
+		t.Errorf("WaterMassKG = %v, want nil — hydration_pct must not be read as water mass", *m.WaterMassKG)
+	}
+
+	if err := s.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	data, err := os.ReadFile(s.FilePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"hydration_pct"`, `"bmi"`} {
+		if strings.Contains(string(data), key) {
+			t.Errorf("Save kept %s:\n%s", key, data)
+		}
+	}
+	if !strings.Contains(string(data), `"schema_version": 1`) {
+		t.Errorf("schema_version changed:\n%s", data)
 	}
 }
 

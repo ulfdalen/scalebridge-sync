@@ -2,6 +2,7 @@ package garmin
 
 import (
 	"encoding/binary"
+	"math"
 	"testing"
 	"time"
 )
@@ -13,7 +14,7 @@ func TestEncodeWeightFIT_structure(t *testing.T) {
 	boneVal := 3.17
 	hydrationVal := 45.8
 	bmiVal := 24.8
-	fit := EncodeWeightFIT(Measurement{
+	fit := mustEncode(t, Measurement{
 		MeasuredAt:   at,
 		WeightKG:     80.5,
 		BodyFatPct:   &fatVal,
@@ -51,7 +52,7 @@ func TestEncodeWeightFIT_structure(t *testing.T) {
 func TestEncodeWeightFIT_optionalFieldsInvalid(t *testing.T) {
 	// Nil body-composition fields must encode as the invalid sentinel — 0xFFFF
 	// for uint16, 0xFF for uint8 — which Garmin's parser skips.
-	fit := EncodeWeightFIT(Measurement{
+	fit := mustEncode(t, Measurement{
 		MeasuredAt: time.Unix(1700000000, 0).UTC(),
 		WeightKG:   75.0,
 	})
@@ -87,7 +88,7 @@ func TestEncodeWeightFIT_bodyScanFields(t *testing.T) {
 	bmr := 1685.5
 	metabolicAge := 34.0
 	visceral := 8.0
-	fit := EncodeWeightFIT(Measurement{
+	fit := mustEncode(t, Measurement{
 		MeasuredAt:        time.Unix(1700000000, 0).UTC(),
 		WeightKG:          75.0,
 		BMRKcal:           &bmr,
@@ -108,29 +109,101 @@ func TestEncodeWeightFIT_bodyScanFields(t *testing.T) {
 	}
 }
 
-func TestEncodeWeightFIT_bodyScanFieldsClamped(t *testing.T) {
-	// A garbage reading must not wrap into a plausible-looking number, and must
-	// not land on the invalid sentinel either.
-	bmr := 99999.0
-	metabolicAge := 900.0
-	visceral := -5.0
-	fit := EncodeWeightFIT(Measurement{
+func TestEncodeWeightFIT_unrepresentableValuesOmitted(t *testing.T) {
+	// A value a field can't hold becomes the invalid sentinel: never clamped to
+	// the field's maximum, never zeroed, never wrapped. Each of those would
+	// land in Garmin Connect as a plausible reading nobody measured.
+	ptr := func(v float64) *float64 { return &v }
+	fit := mustEncode(t, Measurement{
 		MeasuredAt:        time.Unix(1700000000, 0).UTC(),
 		WeightKG:          75.0,
-		BMRKcal:           &bmr,
-		MetabolicAgeYears: &metabolicAge,
-		VisceralFat:       &visceral,
+		BodyFatPct:        ptr(math.NaN()),
+		HydrationPct:      ptr(655.35), // × 100 = 0xFFFF, the sentinel itself
+		BoneKG:            ptr(0.004),  // rounds to 0
+		MuscleKG:          ptr(math.Inf(1)),
+		BMRKcal:           ptr(99999), // × 4 overflows uint16
+		MetabolicAgeYears: ptr(900),   // overflows uint8
+		VisceralFat:       ptr(-5),
+		BMI:               ptr(-0.01),
 	})
 
 	base := firstRecord
-	if got := binary.LittleEndian.Uint16(fit[base+15 : base+17]); got != 0xFFFE {
-		t.Fatalf("basal_met clamp: got %04x want fffe", got)
+	for i, name := range []string{"percent_fat", "percent_hydration", "bone_mass", "muscle_mass", "basal_met"} {
+		off := base + 7 + i*2
+		if got := binary.LittleEndian.Uint16(fit[off : off+2]); got != 0xFFFF {
+			t.Errorf("%s: got %04x want ffff (invalid)", name, got)
+		}
+	}
+	if fit[base+17] != 0xFF {
+		t.Errorf("metabolic_age: got %02x want ff (invalid)", fit[base+17])
+	}
+	if fit[base+18] != 0xFF {
+		t.Errorf("visceral_fat_rating: got %02x want ff (invalid)", fit[base+18])
+	}
+	if got := binary.LittleEndian.Uint16(fit[base+19 : base+21]); got != 0xFFFF {
+		t.Errorf("bmi: got %04x want ffff (invalid)", got)
+	}
+}
+
+func TestEncodeWeightFIT_largestValuesKept(t *testing.T) {
+	// One short of the sentinel is still a value.
+	ptr := func(v float64) *float64 { return &v }
+	fit := mustEncode(t, Measurement{
+		MeasuredAt:        time.Unix(1700000000, 0).UTC(),
+		WeightKG:          75.0,
+		BodyFatPct:        ptr(655.34),
+		MetabolicAgeYears: ptr(254),
+		VisceralFat:       ptr(1),
+	})
+
+	base := firstRecord
+	if got := binary.LittleEndian.Uint16(fit[base+7 : base+9]); got != 0xFFFE {
+		t.Errorf("percent_fat: got %04x want fffe", got)
 	}
 	if fit[base+17] != 0xFE {
-		t.Fatalf("metabolic_age clamp: got %02x want fe", fit[base+17])
+		t.Errorf("metabolic_age: got %02x want fe", fit[base+17])
 	}
-	if fit[base+18] != 0 {
-		t.Fatalf("visceral_fat_rating clamp: got %d want 0", fit[base+18])
+	if fit[base+18] != 1 {
+		t.Errorf("visceral_fat_rating: got %d want 1", fit[base+18])
+	}
+}
+
+func TestEncodeWeightFIT_definition(t *testing.T) {
+	// The data messages are positional: if the definition's field list ever
+	// drifts, every value lands in the wrong field.
+	fit := mustEncode(t, Measurement{MeasuredAt: time.Unix(1700000000, 0).UTC(), WeightKG: 75})
+
+	def := fit[14+18+10 : firstRecord]
+	if def[0] != 0x41 {
+		t.Fatalf("definition header: got %02x want 41 (definition, local 1)", def[0])
+	}
+	if def[2] != 0x00 {
+		t.Fatalf("architecture: got %02x want 00 (little endian)", def[2])
+	}
+	if got := binary.LittleEndian.Uint16(def[3:5]); got != 30 {
+		t.Fatalf("global message: got %d want 30 (weight_scale)", got)
+	}
+	if def[5] != 10 {
+		t.Fatalf("field count: got %d want 10", def[5])
+	}
+	want := [][3]byte{
+		{253, 4, 0x86}, // timestamp
+		{0, 2, 0x84},   // weight
+		{1, 2, 0x84},   // percent_fat
+		{2, 2, 0x84},   // percent_hydration
+		{4, 2, 0x84},   // bone_mass
+		{5, 2, 0x84},   // muscle_mass
+		{7, 2, 0x84},   // basal_met
+		{10, 1, 0x02},  // metabolic_age
+		{11, 1, 0x02},  // visceral_fat_rating
+		{13, 2, 0x84},  // bmi
+	}
+	for i, w := range want {
+		var got [3]byte
+		copy(got[:], def[6+i*3:9+i*3])
+		if got != w {
+			t.Errorf("field %d: got (%d,%d,%#02x) want (%d,%d,%#02x)", i, got[0], got[1], got[2], w[0], w[1], w[2])
+		}
 	}
 }
 
@@ -150,7 +223,10 @@ func TestEncodeWeightFITs_multiRecord(t *testing.T) {
 		{MeasuredAt: at.Add(24 * time.Hour), WeightKG: 80.1}, // no optionals
 		{MeasuredAt: at.Add(48 * time.Hour), WeightKG: 79.9, BodyFatPct: &fatVal},
 	}
-	fit := EncodeWeightFITs(ms)
+	fit, err := EncodeWeightFITs(ms)
+	if err != nil {
+		t.Fatalf("EncodeWeightFITs: %v", err)
+	}
 
 	// The exact length proves the definition message appears once: a repeat
 	// would add 36 bytes.
@@ -202,9 +278,9 @@ func TestEncodeWeightFITs_multiRecord(t *testing.T) {
 	}
 }
 
-func TestEncodeWeightFIT_roundsAndClamps(t *testing.T) {
+func TestEncodeWeightFIT_weightRounded(t *testing.T) {
 	weightOf := func(kg float64) uint16 {
-		fit := EncodeWeightFIT(Measurement{MeasuredAt: time.Unix(1700000000, 0).UTC(), WeightKG: kg})
+		fit := mustEncode(t, Measurement{MeasuredAt: time.Unix(1700000000, 0).UTC(), WeightKG: kg})
 		off := firstRecord + 1 + 4
 		return binary.LittleEndian.Uint16(fit[off : off+2])
 	}
@@ -213,9 +289,63 @@ func TestEncodeWeightFIT_roundsAndClamps(t *testing.T) {
 	if got := weightOf(77.169); got != 7717 {
 		t.Fatalf("rounding: got %d want 7717", got)
 	}
-	// 700 kg × 100 overflows uint16: clamp to 0xFFFE, since 0xFFFF means
-	// "missing" and wrapping would report a plausible wrong weight.
-	if got := weightOf(700); got != 0xFFFE {
-		t.Fatalf("clamp: got %04x want fffe", got)
+	// 0xFFFD is the largest weight: 0xFFFE means "calculating", 0xFFFF missing.
+	if got := weightOf(655.33); got != 0xFFFD {
+		t.Fatalf("largest weight: got %04x want fffd", got)
 	}
+}
+
+func TestEncodeWeightFIT_unencodableWeightIsAnError(t *testing.T) {
+	// Weight is the record: one that can't be encoded must not be clamped to
+	// 655.34 kg ("calculating") or zeroed.
+	for _, kg := range []float64{0, -1, 0.004, 655.34, 700, math.NaN(), math.Inf(1)} {
+		fit, err := EncodeWeightFIT(Measurement{MeasuredAt: time.Unix(1700000000, 0).UTC(), WeightKG: kg})
+		if err == nil {
+			t.Errorf("weight %v: encoded %d bytes, want an error", kg, len(fit))
+		}
+	}
+}
+
+func TestEncodeWeightFIT_unencodableTimestampIsAnError(t *testing.T) {
+	// Below 0x10000000 a FIT date_time means "seconds since power-on", and
+	// 0xFFFFFFFF is invalid; a zero or pre-1998 time would wrap into 2042 or 2106.
+	for _, at := range []time.Time{
+		{},
+		time.Unix(0, 0),
+		time.Unix(fitEpoch-1, 0),
+		time.Unix(fitEpoch+0x10000000-1, 0), // 1998-07-03 21:24:15 UTC
+		time.Unix(fitEpoch+0xFFFFFFFF, 0),
+	} {
+		if fit, err := EncodeWeightFIT(Measurement{MeasuredAt: at, WeightKG: 70}); err == nil {
+			t.Errorf("timestamp %v: encoded %d bytes, want an error", at.UTC(), len(fit))
+		}
+	}
+	for _, at := range []time.Time{
+		time.Unix(fitEpoch+0x10000000, 0), // 1998-07-03 21:24:16 UTC
+		time.Unix(fitEpoch+0xFFFFFFFE, 0),
+	} {
+		if _, err := EncodeWeightFIT(Measurement{MeasuredAt: at, WeightKG: 70}); err != nil {
+			t.Errorf("timestamp %v: %v, want it encoded", at.UTC(), err)
+		}
+	}
+}
+
+func TestEncodeWeightFITs_oneBadRecordFailsTheBatch(t *testing.T) {
+	at := time.Unix(1700000000, 0).UTC()
+	fit, err := EncodeWeightFITs([]Measurement{
+		{MeasuredAt: at, WeightKG: 80},
+		{MeasuredAt: at.Add(time.Hour), WeightKG: 0},
+	})
+	if err == nil || fit != nil {
+		t.Fatalf("got %d bytes, err %v; want nil and an error", len(fit), err)
+	}
+}
+
+func mustEncode(t *testing.T, m Measurement) []byte {
+	t.Helper()
+	fit, err := EncodeWeightFIT(m)
+	if err != nil {
+		t.Fatalf("EncodeWeightFIT: %v", err)
+	}
+	return fit
 }

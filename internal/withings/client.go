@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -41,13 +42,25 @@ const (
 	TypeWeight       = 1
 	TypeFatRatio     = 6
 	TypeMuscleMass   = 76
-	TypeHydration    = 77
+	TypeWaterMass    = 77 // body water MASS in kg, not a percentage — see HydrationPct
 	TypeBoneMass     = 88
-	TypeBMI          = 75
 	TypeVisceralFat  = 170
 	TypeBMR          = 226
 	TypeMetabolicAge = 227 // in the API-reference enum, but absent from the device-compatibility list — may never arrive
 )
+
+// CoreTypes make an uploadable weigh-in on their own. The app's Withings API
+// plan can refuse the advanced types in AllTypes (ErrPlanRestricted), so the
+// syncer falls back to CoreTypes.
+var (
+	CoreTypes = []int{TypeWeight, TypeFatRatio, TypeMuscleMass, TypeWaterMass, TypeBoneMass}
+	AllTypes  = []int{TypeWeight, TypeFatRatio, TypeMuscleMass, TypeWaterMass, TypeBoneMass,
+		TypeVisceralFat, TypeBMR, TypeMetabolicAge}
+)
+
+// maxWeightKG is the most Garmin's FIT weight field holds (0xFFFD × 0.01 kg);
+// no scale reading comes near it.
+const maxWeightKG = 655.33
 
 type Config struct {
 	ClientID     string
@@ -80,6 +93,55 @@ func (c *Client) AuthorizeURL(state string) string {
 	return authorizeURL + "?" + q.Encode()
 }
 
+// ── errors ───────────────────────────────────────────────
+
+// ErrAuthExpired means Withings rejected the token: refresh and retry, or ask
+// the user to reconnect.
+var ErrAuthExpired = errors.New("withings auth expired")
+
+// ErrPlanRestricted means the app's Withings API plan refused one of the
+// requested meastypes; Withings doesn't say which. Refreshing or reconnecting
+// can't fix it, asking for fewer types can.
+var ErrPlanRestricted = errors.New("withings api plan restriction")
+
+// envelope is the wrapper around every Withings response. Body is decoded only
+// once Status says it is a success payload: error replies don't promise its
+// shape.
+type envelope struct {
+	Status *int            `json:"status"`
+	Body   json.RawMessage `json:"body"`
+	Error  string          `json:"error"`
+}
+
+// post sends one form-encoded call and decodes the envelope. Raw bodies never
+// go into errors: token replies carry tokens in plaintext and measure replies
+// carry health data.
+func (c *Client) post(ctx context.Context, endpoint, accessToken string, form url.Values) (envelope, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return envelope{}, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if accessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return envelope{}, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return envelope{}, err
+	}
+
+	var env envelope
+	if err := json.Unmarshal(raw, &env); err != nil || env.Status == nil {
+		return envelope{}, fmt.Errorf("response is not a Withings envelope (HTTP %d)", resp.StatusCode)
+	}
+	return env, nil
+}
+
 // ── token types ──────────────────────────────────────────
 
 type TokenSet struct {
@@ -96,12 +158,6 @@ type tokenBody struct {
 	ExpiresIn    int    `json:"expires_in"`
 	Scope        string `json:"scope"`
 	TokenType    string `json:"token_type"`
-}
-
-type apiResponse[T any] struct {
-	Status int    `json:"status"`
-	Body   T      `json:"body"`
-	Error  string `json:"error"`
 }
 
 // ExchangeCode trades an authorization code for a token set.
@@ -130,37 +186,36 @@ func (c *Client) Refresh(ctx context.Context, refreshToken string) (*TokenSet, e
 }
 
 func (c *Client) postToken(ctx context.Context, form url.Values) (*TokenSet, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
+	env, err := c.post(ctx, tokenURL, "", form)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("withings token: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, err
+	// Withings' error text stays out: nothing promises this endpoint never
+	// echoes what it was sent. Envelope status 401 is the only one meaning "the
+	// user must authorize again"; every other non-zero status is transient or a
+	// bad request.
+	if *env.Status == 401 {
+		return nil, fmt.Errorf("withings token: status=401: %w", ErrAuthExpired)
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-
-	var out apiResponse[tokenBody]
-	if err := json.Unmarshal(raw, &out); err != nil {
-		// Never embed the body: this endpoint returns tokens in plaintext.
-		return nil, fmt.Errorf("withings token: decode: %w", err)
-	}
-	// Envelope status 401 is the only one meaning "the user must authorize
-	// again"; every other non-zero status is transient or a bad request.
-	if out.Status == 401 {
-		return nil, fmt.Errorf("withings token: status=401 error=%q: %w", out.Error, ErrAuthExpired)
-	}
-	if out.Status != 0 {
-		return nil, fmt.Errorf("withings token: status=%d error=%q", out.Status, out.Error)
+	if *env.Status != 0 {
+		return nil, fmt.Errorf("withings token: status=%d", *env.Status)
 	}
 
-	userID, _ := coerceString(out.Body.UserID)
+	var body tokenBody
+	if err := json.Unmarshal(env.Body, &body); err != nil {
+		return nil, errors.New("withings token: response body has an unexpected shape")
+	}
+	// Storing an empty pair would overwrite the refresh token we still hold
+	// and leave the connection unrecoverable.
+	if body.AccessToken == "" || body.RefreshToken == "" {
+		return nil, errors.New("withings token: response carries no tokens")
+	}
+
+	userID, _ := coerceString(body.UserID)
 	return &TokenSet{
-		AccessToken:  out.Body.AccessToken,
-		RefreshToken: out.Body.RefreshToken,
-		ExpiresAt:    time.Now().Add(time.Duration(out.Body.ExpiresIn) * time.Second),
+		AccessToken:  body.AccessToken,
+		RefreshToken: body.RefreshToken,
+		ExpiresAt:    time.Now().Add(time.Duration(body.ExpiresIn) * time.Second),
 		UserID:       userID,
 	}, nil
 }
@@ -188,8 +243,9 @@ type measureBody struct {
 	Measuregrps []RawMeasureGroup `json:"measuregrps"`
 }
 
-// Measurement is a normalized weigh-in: weight, muscle and bone in kg, fat and
-// hydration in %.
+// Measurement is a normalized weigh-in: weight, muscle, bone and water in kg,
+// fat in %. Optional values are nil when Withings didn't send them or sent
+// something that can't be a reading.
 type Measurement struct {
 	GroupID           int64
 	MeasuredAt        time.Time
@@ -197,20 +253,19 @@ type Measurement struct {
 	BodyFatPct        *float64
 	MuscleMassKG      *float64
 	BoneMassKG        *float64
-	HydrationPct      *float64
-	BMI               *float64
+	WaterMassKG       *float64 // hydration % is derived from it, see HydrationPct
 	VisceralFat       *float64 // unitless index, roughly 1–30
 	BMRKcal           *float64 // kcal/day
 	MetabolicAgeYears *float64 // years
 	DeviceID          string
 }
 
-// GetMeasures returns real (category=1) measurements from since until now, over
-// an inclusive absolute window. Used for backfill.
-func (c *Client) GetMeasures(ctx context.Context, accessToken string, since time.Time) ([]Measurement, error) {
-	form := measureForm()
-	form.Set("startdate", strconv.FormatInt(since.Unix(), 10))
-	form.Set("enddate", strconv.FormatInt(time.Now().Unix(), 10))
+// GetMeasures returns real (category=1) measurements of the given types over
+// the inclusive window [start, end].
+func (c *Client) GetMeasures(ctx context.Context, accessToken string, start, end time.Time, types []int) ([]Measurement, error) {
+	form := measureForm(types)
+	form.Set("startdate", strconv.FormatInt(start.Unix(), 10))
+	form.Set("enddate", strconv.FormatInt(end.Unix(), 10))
 
 	measurements, _, err := c.getmeas(ctx, accessToken, form)
 	return measurements, err
@@ -219,65 +274,66 @@ func (c *Client) GetMeasures(ctx context.Context, accessToken string, since time
 // GetMeasuresSince returns everything recorded or edited after the lastUpdate
 // cursor, plus the next cursor, which comes from the server's clock rather than
 // ours. lastUpdate=0 means everything.
-func (c *Client) GetMeasuresSince(ctx context.Context, accessToken string, lastUpdate int64) ([]Measurement, int64, error) {
-	form := measureForm()
+func (c *Client) GetMeasuresSince(ctx context.Context, accessToken string, lastUpdate int64, types []int) ([]Measurement, int64, error) {
+	form := measureForm(types)
 	form.Set("lastupdate", strconv.FormatInt(lastUpdate, 10))
 
 	return c.getmeas(ctx, accessToken, form)
 }
 
-func measureForm() url.Values {
+func measureForm(types []int) url.Values {
+	codes := make([]string, len(types))
+	for i, t := range types {
+		codes[i] = strconv.Itoa(t)
+	}
 	form := url.Values{}
 	form.Set("action", "getmeas")
-	form.Set("meastypes", fmt.Sprintf("%d,%d,%d,%d,%d,%d,%d,%d,%d",
-		TypeWeight, TypeFatRatio, TypeMuscleMass, TypeHydration, TypeBoneMass, TypeBMI,
-		TypeVisceralFat, TypeBMR, TypeMetabolicAge))
+	form.Set("meastypes", strings.Join(codes, ","))
 	form.Set("category", "1")
 	return form
 }
 
 func (c *Client) getmeas(ctx context.Context, accessToken string, form url.Values) ([]Measurement, int64, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, measureURL, strings.NewReader(form.Encode()))
+	env, err := c.post(ctx, measureURL, accessToken, form)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("withings getmeas: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-
-	var out apiResponse[measureBody]
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, 0, fmt.Errorf("withings getmeas decode: %w (raw=%s)", err, truncate(raw, 200))
-	}
-	if out.Status == 401 {
-		return nil, 0, ErrAuthExpired
-	}
-	if out.Status != 0 {
-		return nil, 0, fmt.Errorf("withings getmeas: status=%d error=%q", out.Status, out.Error)
+	switch status := *env.Status; status {
+	case 0:
+	case 100, 101, 102, 200, 401: // Withings' "Authentication failed" family
+		return nil, 0, fmt.Errorf("withings getmeas: status=%d: %w", status, ErrAuthExpired)
+	case 277:
+		// 277 belongs to Withings' general "Unauthorized" family; only the
+		// error text tells a plan restriction apart.
+		if strings.Contains(strings.ToLower(env.Error), "api plan") {
+			return nil, 0, fmt.Errorf("withings getmeas: status=277 error=%q: %w", truncate(env.Error, 300), ErrPlanRestricted)
+		}
+		fallthrough
+	default:
+		return nil, 0, fmt.Errorf("withings getmeas: status=%d error=%q", status, truncate(env.Error, 300))
 	}
 
-	measurements := make([]Measurement, 0, len(out.Body.Measuregrps))
-	for _, g := range out.Body.Measuregrps {
+	var body measureBody
+	if err := json.Unmarshal(env.Body, &body); err != nil {
+		return nil, 0, errors.New("withings getmeas: response body has an unexpected shape")
+	}
+	measurements := make([]Measurement, 0, len(body.Measuregrps))
+	for _, g := range body.Measuregrps {
 		m, ok := normalize(g)
 		if !ok {
 			continue
 		}
 		measurements = append(measurements, m)
 	}
-	return measurements, out.Body.Updatetime, nil
+	return measurements, body.Updatetime, nil
 }
 
-// ErrAuthExpired means Withings rejected the token: refresh and retry, or ask
-// the user to reconnect.
-var ErrAuthExpired = errors.New("withings auth expired")
-
-// normalize converts one measuregrp into a Measurement. Groups without a weight
-// reading are dropped (ok=false).
+// normalize converts one measuregrp into a Measurement, or ok=false when it
+// can't be a weigh-in: no date, no weight, or a weight Garmin can't hold (kept,
+// it would fail every upload). A value that can't be a reading — a percentage
+// of 100 or more, a part of the body heavier than the body — is dropped on its
+// own and the weigh-in kept. Values only ever come from this group, so a
+// weigh-in never borrows a reading from another one.
 func normalize(g RawMeasureGroup) (Measurement, bool) {
 	m := Measurement{
 		GroupID:    g.GroupID,
@@ -285,49 +341,72 @@ func normalize(g RawMeasureGroup) (Measurement, bool) {
 		DeviceID:   g.DeviceID,
 	}
 
-	hasWeight := false
 	for _, v := range g.Measures {
-		val := float64(v.Value) * pow10(v.Unit)
+		val := reading(v)
+		if val == nil {
+			continue // so a repeated type can't erase an earlier reading
+		}
 		switch v.Type {
 		case TypeWeight:
-			m.WeightKG = val
-			hasWeight = true
+			m.WeightKG = *val
 		case TypeFatRatio:
-			m.BodyFatPct = floatPtr(val)
+			m.BodyFatPct = val
 		case TypeMuscleMass:
-			m.MuscleMassKG = floatPtr(val)
-		case TypeHydration:
-			m.HydrationPct = floatPtr(val)
+			m.MuscleMassKG = val
+		case TypeWaterMass:
+			m.WaterMassKG = val
 		case TypeBoneMass:
-			m.BoneMassKG = floatPtr(val)
-		case TypeBMI:
-			m.BMI = floatPtr(val)
+			m.BoneMassKG = val
 		case TypeVisceralFat:
-			m.VisceralFat = floatPtr(val)
+			m.VisceralFat = val
 		case TypeBMR:
-			m.BMRKcal = floatPtr(val)
+			m.BMRKcal = val
 		case TypeMetabolicAge:
-			m.MetabolicAgeYears = floatPtr(val)
+			m.MetabolicAgeYears = val
 		}
 	}
-	return m, hasWeight
+	if g.Date <= 0 || m.WeightKG == 0 || m.WeightKG > maxWeightKG {
+		return m, false
+	}
+	m.BodyFatPct = below(m.BodyFatPct, 100)
+	m.MuscleMassKG = below(m.MuscleMassKG, m.WeightKG)
+	m.BoneMassKG = below(m.BoneMassKG, m.WeightKG)
+	m.WaterMassKG = below(m.WaterMassKG, m.WeightKG)
+	m.VisceralFat = below(m.VisceralFat, 100)             // Withings' index runs roughly 1–30
+	m.BMRKcal = below(m.BMRKcal, 10000)                   // several times any human BMR
+	m.MetabolicAgeYears = below(m.MetabolicAgeYears, 150) // years
+	return m, true
 }
 
-func pow10(n int) float64 {
-	p := 1.0
-	if n >= 0 {
-		for i := 0; i < n; i++ {
-			p *= 10
-		}
-		return p
+// reading decodes value × 10^unit, or nil unless the result is finite and
+// positive: every metric we sync is, and a zero would otherwise travel to
+// Garmin as if it had been measured.
+func reading(v RawMeasure) *float64 {
+	val := float64(v.Value) * math.Pow10(v.Unit)
+	if !(val > 0) || math.IsInf(val, 1) {
+		return nil
 	}
-	for i := 0; i < -n; i++ {
-		p /= 10
-	}
-	return p
+	return &val
 }
 
-func floatPtr(v float64) *float64 { return &v }
+// below keeps v only while it is under max.
+func below(v *float64, max float64) *float64 {
+	if v != nil && *v < max {
+		return v
+	}
+	return nil
+}
+
+// HydrationPct converts body water mass into the hydration percentage Garmin
+// expects, using the weight of the same weigh-in: 42 kg of water at 70 kg is
+// 60%, not 42%. ok=false — leave hydration out — unless both are finite and
+// 0 < water < weight.
+func HydrationPct(waterKG, weightKG float64) (float64, bool) {
+	if !(waterKG > 0) || !(waterKG < weightKG) || math.IsInf(weightKG, 1) {
+		return 0, false
+	}
+	return waterKG / weightKG * 100, true
+}
 
 func coerceString(v any) (string, bool) {
 	switch x := v.(type) {
@@ -342,11 +421,10 @@ func coerceString(v any) (string, bool) {
 	}
 }
 
-// truncate caps a response body before it goes into an error message: getmeas
-// bodies hold no secrets, but a whole one is a measurement history.
-func truncate(b []byte, max int) string {
-	if len(b) <= max {
-		return string(b)
+// truncate caps Withings' error text before it goes into an error message.
+func truncate(s string, max int) string {
+	if r := []rune(s); len(r) > max {
+		return string(r[:max]) + "…"
 	}
-	return string(b[:max]) + "...(truncated)"
+	return s
 }

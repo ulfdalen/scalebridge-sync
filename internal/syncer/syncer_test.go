@@ -2,14 +2,18 @@ package syncer
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ulfdalen/scalebridge-sync/internal/garmin"
 	"github.com/ulfdalen/scalebridge-sync/internal/store"
 	"github.com/ulfdalen/scalebridge-sync/internal/withings"
 )
@@ -85,7 +89,7 @@ func TestTickHappyPath(t *testing.T) {
 // differently (MuscleMassKG vs MuscleKG), so a swap would ship bone as muscle.
 func TestTickMapsEveryBodyCompositionField(t *testing.T) {
 	h := newHarness(t)
-	h.w.addFull(1, hoursAgo(2), 80.5, 18.25, 60.2, 3.17, 55.5, 24.8, 8, 1685.5, 34)
+	h.w.addFull(1, hoursAgo(2), 80.5, 18.25, 60.2, 3.17, 48.3, 8, 1685.5, 34)
 
 	h.tick()
 
@@ -94,13 +98,13 @@ func TestTickMapsEveryBodyCompositionField(t *testing.T) {
 		timestamp:    got.timestamp,
 		weight:       8050,
 		fat:          1825,
-		hydration:    5550,
+		hydration:    6000, // 48.3 kg of water ÷ 80.5 kg, not 48.3 %
 		bone:         317,
 		muscle:       6020,
 		basalMet:     6742, // 1685.5 kcal/day × 4
 		metabolicAge: 34,
 		visceralFat:  8,
-		bmi:          248,
+		bmi:          0xFFFF, // Withings has no BMI meastype
 	}
 	if got != want {
 		t.Errorf("FIT record = %+v, want %+v", got, want)
@@ -115,8 +119,7 @@ func TestTickMapsEveryBodyCompositionField(t *testing.T) {
 		{"body fat %", stored.BodyFatPct, 18.25},
 		{"muscle kg", stored.MuscleKG, 60.2},
 		{"bone kg", stored.BoneKG, 3.17},
-		{"hydration %", stored.HydrationPct, 55.5},
-		{"bmi", stored.BMI, 24.8},
+		{"water kg", stored.WaterMassKG, 48.3},
 		{"visceral fat", stored.VisceralFat, 8},
 		{"bmr kcal", stored.BMRKcal, 1685.5},
 		{"metabolic age", stored.MetabolicAgeYears, 34},
@@ -608,6 +611,382 @@ func TestTickCursorZeroUsesAbsoluteWindow(t *testing.T) {
 	}
 	if len(h.g.accepted()) != 1 {
 		t.Errorf("uploads = %d, want 1", len(h.g.accepted()))
+	}
+}
+
+// ── 11. Withings API plan ────────────────────────────────
+
+const (
+	allTypesParam  = "1,6,76,77,88,170,226,227"
+	coreTypesParam = "1,6,76,77,88"
+)
+
+func (h *harness) refuseAdvanced() {
+	h.w.refuseTypes(withings.TypeVisceralFat, withings.TypeBMR, withings.TypeMetabolicAge)
+}
+
+func countEvents(h *harness, level, substr string) int {
+	n := 0
+	for _, e := range h.s.Events(0) {
+		if e.Level == level && strings.Contains(e.Message, substr) {
+			n++
+		}
+	}
+	return n
+}
+
+func meastypes(forms []url.Values) []string {
+	out := make([]string, len(forms))
+	for i, f := range forms {
+		out[i] = f.Get("meastypes")
+	}
+	return out
+}
+
+func TestTickPlanRefusalFallsBackToCoreTypes(t *testing.T) {
+	h := newHarness(t)
+	h.w.addFull(1, hoursAgo(2), 80.5, 18.25, 60.2, 3.17, 48.3, 8, 1685.5, 34)
+	h.refuseAdvanced()
+
+	h.tick()
+
+	forms := h.w.allForms()
+	if got := meastypes(forms); len(got) != 2 || got[0] != allTypesParam || got[1] != coreTypesParam {
+		t.Fatalf("getmeas meastypes = %q, want exactly [all, core]", got)
+	}
+	for i, f := range forms {
+		if got := f.Get("lastupdate"); got != "1000" {
+			t.Errorf("request %d lastupdate = %q, want the same cursor (1000) on both", i, got)
+		}
+	}
+
+	accepted := h.g.accepted()
+	if len(accepted) != 1 {
+		t.Fatalf("uploads = %d, want the weigh-in uploaded with its core values", len(accepted))
+	}
+	got := parseFIT(t, accepted[0].fit)[0]
+	want := fitRecord{
+		timestamp: got.timestamp, weight: 8050, fat: 1825, hydration: 6000, bone: 317, muscle: 6020,
+		basalMet: 0xFFFF, metabolicAge: 0xFF, visceralFat: 0xFF, bmi: 0xFFFF,
+	}
+	if got != want {
+		t.Errorf("FIT record = %+v, want %+v", got, want)
+	}
+	if len(h.st.State.Synced) != 1 || len(h.st.State.Pending) != 0 || h.st.State.Withings.LastUpdate != 2000 {
+		t.Errorf("store = synced %+v pending %+v cursor %d", h.st.State.Synced, h.st.State.Pending, h.st.State.Withings.LastUpdate)
+	}
+
+	if _, token := h.w.counts(); token != 0 {
+		t.Errorf("token calls = %d, want 0 — a plan refusal is not an auth problem", token)
+	}
+	if h.st.State.Withings.ReconnectRequired || h.reopen().State.Withings.ReconnectRequired {
+		t.Error("a plan refusal must never latch reconnect_required")
+	}
+	if got := h.s.Status().LastError; got != "" {
+		t.Errorf("LastError = %q, want a clean tick", got)
+	}
+	if n := countEvents(h, "warn", "API plan refused visceral fat"); n != 1 {
+		t.Errorf("plan warnings = %d, want 1: %+v", n, h.s.Events(0))
+	}
+}
+
+// The core-only reply has to be retried with the token the refresh produced,
+// not the dead one — a second refresh would burn a rotation for nothing.
+func TestTickPlanRefusalAfterAuthRetryReusesTheFreshToken(t *testing.T) {
+	h := newHarness(t)
+	h.w.add(1, hoursAgo(2), 80)
+	h.refuseAdvanced()
+	h.w.scriptStatuses(401)
+
+	h.tick()
+
+	if got := meastypes(h.w.allForms()); len(got) != 3 || got[2] != coreTypesParam {
+		t.Fatalf("getmeas meastypes = %q, want [all (401), all (277), core]", got)
+	}
+	if _, token := h.w.counts(); token != 1 {
+		t.Errorf("token calls = %d, want exactly the one refresh the 401 needed", token)
+	}
+	if len(h.g.accepted()) != 1 {
+		t.Errorf("uploads = %d, want 1", len(h.g.accepted()))
+	}
+}
+
+func TestTickPlanRefusalIsRememberedForSixHours(t *testing.T) {
+	h := newHarness(t)
+	h.refuseAdvanced()
+	h.tick()
+	if n := len(h.w.allForms()); n != 2 {
+		t.Fatalf("first tick made %d getmeas, want 2", n)
+	}
+
+	// Within 6 h: core types only, one request, no new warning.
+	h.w.mu.Lock()
+	h.w.updateTime = 3000 // a new weigh-in moves the server's cursor
+	h.w.mu.Unlock()
+	h.w.add(1, hoursAgo(1), 80)
+	h.tick()
+	forms := h.w.allForms()
+	if got := meastypes(forms[2:]); len(got) != 1 || got[0] != coreTypesParam {
+		t.Fatalf("second tick meastypes = %q, want one core-only request", got)
+	}
+	if len(h.g.accepted()) != 1 {
+		t.Errorf("uploads = %d, want the new weigh-in synced", len(h.g.accepted()))
+	}
+
+	// After 6 h the advanced types are asked for again; still refused, so one
+	// more fallback — and still a single warning in the log.
+	h.s.advancedRefusedAt = time.Now().Add(-advancedRetryAfter - time.Minute)
+	h.tick()
+	forms = h.w.allForms()
+	if got := meastypes(forms[3:]); len(got) != 2 || got[0] != allTypesParam || got[1] != coreTypesParam {
+		t.Fatalf("tick after 6 h meastypes = %q, want [all, core]", got)
+	}
+	if time.Since(h.s.advancedRefusedAt) > time.Minute {
+		t.Errorf("advancedRefusedAt = %v, want it renewed by the new refusal", h.s.advancedRefusedAt)
+	}
+	if n := countEvents(h, "warn", "API plan refused"); n != 1 {
+		t.Errorf("plan warnings = %d, want 1 — events only when the state flips", n)
+	}
+
+	// The plan now allows them: one all-types request clears the flag, once.
+	h.w.refuseTypes()
+	h.s.advancedRefusedAt = time.Now().Add(-advancedRetryAfter - time.Minute)
+	h.tick()
+	h.tick()
+	forms = h.w.allForms()
+	if got := meastypes(forms[5:]); len(got) != 2 || got[0] != allTypesParam || got[1] != allTypesParam {
+		t.Fatalf("ticks after the plan changed: meastypes = %q, want [all, all]", got)
+	}
+	if !h.s.advancedRefusedAt.IsZero() {
+		t.Error("a full success must clear advancedRefusedAt")
+	}
+	if n := countEvents(h, "info", "allows visceral fat"); n != 1 {
+		t.Errorf("recovery events = %d, want 1: %+v", n, h.s.Events(0))
+	}
+}
+
+func TestTickPlanRefusingCoreTypesTooIsAFetchError(t *testing.T) {
+	h := newHarness(t)
+	h.w.add(1, hoursAgo(2), 80)
+	h.w.refuseTypes(withings.TypeWeight, withings.TypeVisceralFat)
+
+	h.tick()
+
+	if measure, token := h.w.counts(); measure != 2 || token != 0 {
+		t.Errorf("getmeas %d, token %d; want 2 getmeas (all, core) and no refresh", measure, token)
+	}
+	if !h.s.advancedRefusedAt.IsZero() {
+		t.Error("a failed fallback must not set the flag")
+	}
+	if h.st.State.Withings.ReconnectRequired || h.reopen().State.Withings.ReconnectRequired {
+		t.Error("a plan refusal must never latch reconnect_required")
+	}
+	if len(h.g.allAttempts()) != 0 || h.st.State.Withings.LastUpdate != 1000 {
+		t.Errorf("nothing may move: uploads %d, cursor %d", len(h.g.allAttempts()), h.st.State.Withings.LastUpdate)
+	}
+	if countEvents(h, "error", "Fetch failed") != 1 || countEvents(h, "warn", "API plan") != 0 {
+		t.Errorf("events = %+v, want one fetch error and no plan warning", h.s.Events(0))
+	}
+	if got := h.s.Status().LastError; !strings.Contains(got, "277") {
+		t.Errorf("LastError = %q, want the 277 refusal", got)
+	}
+}
+
+func TestBackfillPlanRefusalFallsBackToCoreTypes(t *testing.T) {
+	h := newHarness(t)
+	for i := range 3 {
+		h.w.addFull(int64(i+1), hoursAgo(30-i), 80.5, 18.25, 60.2, 3.17, 48.3, 8, 1685.5, 34)
+	}
+	h.refuseAdvanced()
+
+	if !h.s.runBackfill(t.Context(), "30d") {
+		t.Fatal("runBackfill refused")
+	}
+
+	forms := h.w.allForms()
+	if got := meastypes(forms); len(got) != 2 || got[0] != allTypesParam || got[1] != coreTypesParam {
+		t.Fatalf("getmeas meastypes = %q, want exactly [all, core]", got)
+	}
+	for _, key := range []string{"startdate", "enddate"} {
+		if forms[0].Get(key) == "" || forms[0].Get(key) != forms[1].Get(key) {
+			t.Errorf("%s = %q then %q, want the same window on both", key, forms[0].Get(key), forms[1].Get(key))
+		}
+	}
+	accepted := h.g.accepted()
+	if len(accepted) != 1 {
+		t.Fatalf("uploads = %d, want one batch", len(accepted))
+	}
+	for i, r := range parseFIT(t, accepted[0].fit) {
+		if r.weight != 8050 || r.hydration != 6000 || r.visceralFat != 0xFF {
+			t.Errorf("record %d = %+v, want core values with derived hydration, no visceral fat", i, r)
+		}
+	}
+	if len(h.st.State.Synced) != 3 {
+		t.Errorf("synced = %d, want 3", len(h.st.State.Synced))
+	}
+	if n := countEvents(h, "warn", "API plan refused"); n != 1 {
+		t.Errorf("plan warnings = %d, want 1", n)
+	}
+}
+
+func TestTickCoreOnlyRefusedInsideTheWindowKeepsTheFlag(t *testing.T) {
+	h := newHarness(t)
+	refusedAt := time.Now().Add(-time.Hour)
+	h.s.advancedRefusedAt = refusedAt
+	h.w.add(1, hoursAgo(2), 80)
+	h.w.refuseTypes(withings.TypeWeight)
+
+	h.tick()
+
+	if got := meastypes(h.w.allForms()); len(got) != 1 || got[0] != coreTypesParam {
+		t.Fatalf("getmeas meastypes = %q, want one core-only request", got)
+	}
+	if !h.s.advancedRefusedAt.Equal(refusedAt) {
+		t.Errorf("advancedRefusedAt = %v, want it left at %v", h.s.advancedRefusedAt, refusedAt)
+	}
+	if _, token := h.w.counts(); token != 0 || h.st.State.Withings.ReconnectRequired {
+		t.Errorf("token calls %d, reconnect %v; a plan refusal must neither refresh nor latch", token, h.st.State.Withings.ReconnectRequired)
+	}
+	if countEvents(h, "error", "Fetch failed") != 1 {
+		t.Errorf("events = %+v, want one fetch error", h.s.Events(0))
+	}
+}
+
+// ── 12. defensive data paths ─────────────────────────────
+
+// A weigh-in FIT can't hold (here dated before 1998, as from a scale with an
+// unset clock) would otherwise fail its whole batch on every re-run.
+func TestBackfillSkipsUnencodableWeighIns(t *testing.T) {
+	h := newHarness(t)
+	h.w.add(1, time.Unix(800000000, 0), 80) // 1995
+	h.w.add(2, hoursAgo(3), 81)
+	h.w.add(3, hoursAgo(2), 82)
+
+	if !h.s.runBackfill(t.Context(), "all") {
+		t.Fatal("runBackfill refused")
+	}
+
+	accepted := h.g.accepted()
+	if len(accepted) != 1 {
+		t.Fatalf("uploads = %d, want one batch", len(accepted))
+	}
+	if records := parseFIT(t, accepted[0].fit); len(records) != 2 || records[0].weight != 8100 || records[1].weight != 8200 {
+		t.Errorf("batch = %+v, want the two encodable weigh-ins", records)
+	}
+	if got := ids(h.st.State.Recent); len(h.st.State.Synced) != 2 || len(got) != 2 {
+		t.Errorf("synced %+v recent %v, want grpids 2 and 3 only", h.st.State.Synced, got)
+	}
+	if countEvents(h, "error", "Backfill skipped the weigh-in from 1995") != 1 {
+		t.Errorf("events = %+v, want one skip naming the weigh-in", h.s.Events(0))
+	}
+	if countEvents(h, "info", "uploaded 2 measurements") != 1 {
+		t.Errorf("events = %+v, want the backfill to complete", h.s.Events(0))
+	}
+}
+
+func TestTickTokenlessRefreshKeepsStoredTokens(t *testing.T) {
+	h := newHarness(t)
+	h.w.add(1, hoursAgo(2), 80)
+	h.w.refreshWithoutTokens()
+	h.st.State.Withings.ExpiresAt = time.Now().Add(-time.Minute) // forces a refresh
+	before := h.st.State.Withings
+
+	h.tick()
+
+	for name, w := range map[string]store.Withings{"memory": h.st.State.Withings, "disk": h.reopen().State.Withings} {
+		if w.AccessToken != before.AccessToken || w.RefreshToken != before.RefreshToken {
+			t.Errorf("%s holds %q/%q, want the untouched %q/%q", name, w.AccessToken, w.RefreshToken,
+				before.AccessToken, before.RefreshToken)
+		}
+		if w.ReconnectRequired {
+			t.Errorf("%s: a tokenless reply must not latch reconnect_required", name)
+		}
+	}
+	if measure, _ := h.w.counts(); measure != 0 {
+		t.Errorf("getmeas calls = %d, want 0 without a usable token", measure)
+	}
+	if h.s.Status().LastError == "" {
+		t.Error("the failed refresh should be visible in status")
+	}
+}
+
+func TestTickNeverUploadsLegacyHydration(t *testing.T) {
+	h := newHarness(t)
+	// A pending entry exactly as a pre-v0.0.4 binary left it: hydration_pct
+	// held the water mass in kg.
+	path := filepath.Join(h.dir, "state.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["pending"] = []any{map[string]any{
+		"grpid": 7, "measured_at": hoursAgo(3).Format(time.RFC3339), "weight_kg": 70,
+		"hydration_pct": 42, "bmi": 24.1,
+	}}
+	if raw, err = json.Marshal(doc); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.st.State = h.reopen().State
+
+	h.tick()
+
+	accepted := h.g.accepted()
+	if len(accepted) != 1 {
+		t.Fatalf("uploads = %d, want the legacy weigh-in uploaded", len(accepted))
+	}
+	got := parseFIT(t, accepted[0].fit)[0]
+	if got.weight != 7000 || got.hydration != 0xFFFF || got.bmi != 0xFFFF {
+		t.Errorf("FIT record = %+v, want weight 7000 with hydration and bmi invalid", got)
+	}
+	if raw, _ := os.ReadFile(path); strings.Contains(string(raw), "hydration_pct") || strings.Contains(string(raw), `"bmi"`) {
+		t.Errorf("state file still carries the legacy keys:\n%s", raw)
+	}
+}
+
+func TestTickUnencodableMeasurementIsDroppedWithoutUploading(t *testing.T) {
+	h := newHarness(t)
+	// Older binaries queued dateless weigh-ins; FIT would wrap the zero time
+	// into 2042 or 2106.
+	bad := store.Measurement{GroupID: 7, MeasuredAt: time.Unix(0, 0).UTC(), WeightKG: 70}
+	h.st.State.Pending = []store.Measurement{bad}
+	h.st.State.Recent = []store.Measurement{bad}
+	h.w.add(1, hoursAgo(2), 80)
+
+	h.tick()
+
+	accepted := h.g.accepted()
+	if len(h.g.allAttempts()) != 1 || len(accepted) != 1 || parseFIT(t, accepted[0].fit)[0].weight != 8000 {
+		t.Fatalf("upload attempts = %d, want only the valid weigh-in sent", len(h.g.allAttempts()))
+	}
+	if len(h.st.State.Pending) != 0 {
+		t.Errorf("pending = %+v, want the unencodable entry dropped", h.st.State.Pending)
+	}
+	if r := h.st.State.Recent[0]; r.GroupID != 7 || r.Synced || r.SyncError == "" {
+		t.Errorf("recent = %+v, want the dropped entry marked with a reason", r)
+	}
+	if countEvents(h, "error", "timestamp") != 1 {
+		t.Errorf("events = %+v, want one error naming the timestamp", h.s.Events(0))
+	}
+}
+
+func TestWriteBatchUnencodableIsABadRequest(t *testing.T) {
+	h := newHarness(t)
+	res, _, err := h.s.writeBatch(t.Context(), []store.Measurement{
+		{GroupID: 1, MeasuredAt: hoursAgo(3), WeightKG: 80},
+		{GroupID: 2, MeasuredAt: hoursAgo(2), WeightKG: 0},
+	})
+	if res != garmin.WriteBadRequest || err == nil {
+		t.Errorf("writeBatch = %v, %v; want WriteBadRequest and an error", res, err)
+	}
+	if n := len(h.g.allAttempts()); n != 0 {
+		t.Errorf("upload attempts = %d, want 0", n)
 	}
 }
 

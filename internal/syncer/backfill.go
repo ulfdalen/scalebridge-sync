@@ -5,7 +5,6 @@ package syncer
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -76,7 +75,7 @@ func backfillSince(rng string) (time.Time, bool) {
 func (s *Syncer) backfill(ctx context.Context, since time.Time) {
 	start := time.Now()
 
-	fetched, err := s.backfillFetch(ctx, since)
+	fetched, err := s.backfillFetch(ctx, since, start)
 	if err != nil {
 		s.AddEvent("error", "Backfill failed: "+err.Error())
 		return
@@ -87,7 +86,15 @@ func (s *Syncer) backfill(ctx context.Context, since time.Time) {
 		if s.isSynced(m.GroupID) {
 			continue
 		}
-		todo = append(todo, toStore(m))
+		sm := toStore(m)
+		// One weigh-in FIT can't hold would fail its whole batch, on this run
+		// and every re-run, since it never reaches Synced.
+		if _, err := garmin.EncodeWeightFIT(toGarmin(sm)); err != nil {
+			s.AddEvent("error", fmt.Sprintf("Backfill skipped the weigh-in from %s: %s",
+				sm.MeasuredAt.Format("2006-01-02 15:04"), err.Error()))
+			continue
+		}
+		todo = append(todo, sm)
 	}
 	sort.Slice(todo, func(i, j int) bool { return todo[i].MeasuredAt.Before(todo[j].MeasuredAt) })
 	if len(todo) == 0 {
@@ -136,37 +143,33 @@ func (s *Syncer) backfill(ctx context.Context, since time.Time) {
 	slog.Debug("backfill done", "uploaded", len(uploaded), "batches", len(batches), "took", time.Since(start))
 }
 
-// backfillFetch mirrors the tick's fetch: one refresh + retry on a 401.
-func (s *Syncer) backfillFetch(ctx context.Context, since time.Time) ([]withings.Measurement, error) {
-	token, err := s.withingsToken(ctx)
-	if err != nil {
-		return nil, err
-	}
-	ms, err := s.withingsClient().GetMeasures(ctx, token, since)
-	if errors.Is(err, withings.ErrAuthExpired) {
-		if token, err = s.refreshWithings(ctx); err != nil {
-			return nil, err
-		}
-		ms, err = s.withingsClient().GetMeasures(ctx, token, since)
-		if errors.Is(err, withings.ErrAuthExpired) {
-			s.latchWithings("Withings rejected a freshly refreshed token")
-		}
-	}
+// backfillFetch mirrors the tick's fetch over the fixed window [since, end]:
+// one refresh + retry on a 401, one core-only retry on a plan refusal.
+func (s *Syncer) backfillFetch(ctx context.Context, since, end time.Time) ([]withings.Measurement, error) {
+	c := s.withingsClient()
+	ms, _, err := s.getMeasures(ctx, func(token string, types []int) ([]withings.Measurement, int64, error) {
+		ms, err := c.GetMeasures(ctx, token, since, end, types)
+		return ms, 0, err
+	})
 	return ms, err
 }
 
 // writeBatch uploads one multi-record FIT: refresh + retry once on a 401,
-// one backoff retry on a transient failure, then give up on this batch.
+// one backoff retry on a transient failure, then give up on this batch. A
+// batch that can't be encoded is a bad request.
 func (s *Syncer) writeBatch(ctx context.Context, batch []store.Measurement) (garmin.WriteResult, time.Duration, error) {
-	token, err := s.garminToken(ctx)
-	if err != nil {
-		return garmin.WriteAuthExpired, 0, err
-	}
 	ms := make([]garmin.Measurement, len(batch))
 	for i, m := range batch {
 		ms[i] = toGarmin(m)
 	}
-	fit := garmin.EncodeWeightFITs(ms)
+	fit, err := garmin.EncodeWeightFITs(ms)
+	if err != nil {
+		return garmin.WriteBadRequest, 0, err
+	}
+	token, err := s.garminToken(ctx)
+	if err != nil {
+		return garmin.WriteAuthExpired, 0, err
+	}
 
 	res, retryAfter, werr := garmin.WriteFIT(ctx, token, fit)
 	if res == garmin.WriteAuthExpired {

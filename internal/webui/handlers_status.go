@@ -9,6 +9,7 @@ import (
 
 	"github.com/ulfdalen/scalebridge-sync/internal/store"
 	"github.com/ulfdalen/scalebridge-sync/internal/syncer"
+	"github.com/ulfdalen/scalebridge-sync/internal/withings"
 )
 
 const (
@@ -100,7 +101,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // Spells out the nulls: store.Measurement omits empty pointers, and the API
-// contract promises the keys are always present.
+// contract promises the keys are always present. HydrationPct is derived from
+// water mass and weight; BMI is deprecated and always null.
 type measurementResp struct {
 	MeasuredAt        time.Time `json:"measured_at"`
 	WeightKG          float64   `json:"weight_kg"`
@@ -125,14 +127,19 @@ func (s *Server) handleMeasurements(w http.ResponseWriter, r *http.Request) {
 		// Recent is oldest-first on disk; the dashboard wants newest first.
 		for i := len(recent) - 1; i >= 0 && len(items) < limit; i-- {
 			m := recent[i]
+			var hydration *float64
+			if m.WaterMassKG != nil {
+				if pct, ok := withings.HydrationPct(*m.WaterMassKG, m.WeightKG); ok {
+					hydration = &pct
+				}
+			}
 			items = append(items, measurementResp{
 				MeasuredAt:        m.MeasuredAt,
 				WeightKG:          m.WeightKG,
 				BodyFatPct:        m.BodyFatPct,
 				MuscleKG:          m.MuscleKG,
 				BoneKG:            m.BoneKG,
-				HydrationPct:      m.HydrationPct,
-				BMI:               m.BMI,
+				HydrationPct:      hydration,
 				VisceralFat:       m.VisceralFat,
 				BMRKcal:           m.BMRKcal,
 				MetabolicAgeYears: m.MetabolicAgeYears,

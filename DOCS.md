@@ -15,6 +15,7 @@ If you'd rather not run it yourself, the hosted version at [scalebridge.ulf.su](
 - [How it works](#how-it-works)
 - [Honest disclaimer](#honest-disclaimer)
 - [CLI reference](#cli-reference)
+- [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
 
 ## Install
@@ -236,6 +237,14 @@ This project is not affiliated with, endorsed by, or supported by Garmin or With
 | `--public-url <url>` | The origin your reverse proxy serves the UI at, e.g. `https://scale.example.com`; also read from `SCALEBRIDGE_PUBLIC_URL`. Accepts that Host header and makes the Withings callback URL `<url>/callback`. The UI still has no login — see [Behind a reverse proxy](#behind-a-reverse-proxy). `install` bakes it into the service definition. |
 
 The port lives in Settings, not on the command line, because it is not just a local choice: it is part of the callback URL you registered with Withings (`http://localhost:8723/callback`). The Settings page has a guided flow that updates the Withings portal and the app in the right order. With `--public-url` the callback URL is the public origin instead, so the port only matters to your proxy.
+
+## Troubleshooting
+
+**"API plan refused visceral fat, basal metabolic rate and metabolic age" in the event log.** Since 12 October 2026 Withings rejects a whole measurement request, with status 277 and the message "One of the data type requested in this API request is not available in your API plan", when it asks for a type your app's API plan doesn't cover. scalebridge-sync asks for everything first. On that refusal it repeats the same request once with only weight, body fat, muscle mass, body water and bone mass, uploads what comes back, and logs this warning once. It tries the full set again every six hours, and on every restart, and logs once more when it gets through. Weigh-ins synced in between stay without those three values. If Withings refuses even the reduced request, the event log shows `Fetch failed: withings getmeas: status=277 …` and nothing syncs: check your application's plan on [developer.withings.com](https://developer.withings.com/).
+
+**Withings account created after 12 October 2026.** Withings requires a Withings+ membership before such an account can share data with an app on the free API plan, which every personal app is. That is Withings' rule; scalebridge-sync can't work around it.
+
+**Hydration looked wrong in Garmin Connect before v0.0.4.** Withings reports body water as a mass in kilograms, and older versions uploaded that number as a percentage (42 kg of water showed up as 42 % instead of 60 % at 70 kg). Since v0.0.4 hydration is water ÷ weight × 100 from the same weigh-in. Weigh-ins already in Garmin Connect keep the old value.
 
 ## Contributing
 

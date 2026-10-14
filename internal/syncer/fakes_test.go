@@ -49,10 +49,15 @@ type fakeWithings struct {
 
 	statuses    []int // scripted envelope statuses for getmeas, popped per call
 	refreshDead bool  // refresh always answers invalid_grant
+	tokenless   bool  // refresh answers status 0 without any tokens
+
+	// refused are the meastypes the app's API plan refuses: a getmeas asking
+	// for any of them gets status 277, like Withings since 2026-10-12.
+	refused map[int]bool
 
 	measureCalls int
 	tokenCalls   int
-	lastForm     url.Values
+	forms        []url.Values  // every getmeas form, in order
 	hold         chan struct{} // when set, getmeas blocks until closed
 
 	// probe, when set, runs on every getmeas and its answer is recorded, so a
@@ -100,7 +105,7 @@ func (f *fakeWithings) add(grpid int64, at time.Time, kg float64) {
 
 // addFull is add() with every body-composition value Withings can report, in
 // Withings wire units (value × 10^unit).
-func (f *fakeWithings) addFull(grpid int64, at time.Time, kg, fatPct, muscleKG, boneKG, hydrationPct, bmi, visceralFat, bmrKcal, metabolicAgeYears float64) {
+func (f *fakeWithings) addFull(grpid int64, at time.Time, kg, fatPct, muscleKG, boneKG, waterKG, visceralFat, bmrKcal, metabolicAgeYears float64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	hundredths := func(v float64) int { return int(v*100 + 0.5) }
@@ -115,8 +120,7 @@ func (f *fakeWithings) addFull(grpid int64, at time.Time, kg, fatPct, muscleKG, 
 				{Type: withings.TypeFatRatio, Value: hundredths(fatPct), Unit: -2},
 				{Type: withings.TypeMuscleMass, Value: hundredths(muscleKG), Unit: -2},
 				{Type: withings.TypeBoneMass, Value: hundredths(boneKG), Unit: -2},
-				{Type: withings.TypeHydration, Value: hundredths(hydrationPct), Unit: -2},
-				{Type: withings.TypeBMI, Value: int(bmi*10 + 0.5), Unit: -1},
+				{Type: withings.TypeWaterMass, Value: hundredths(waterKG), Unit: -2},
 				{Type: withings.TypeVisceralFat, Value: hundredths(visceralFat), Unit: -2},
 				{Type: withings.TypeBMR, Value: hundredths(bmrKcal), Unit: -2},
 				{Type: withings.TypeMetabolicAge, Value: hundredths(metabolicAgeYears), Unit: -2},
@@ -138,6 +142,23 @@ func (f *fakeWithings) killRefresh() {
 	f.refreshDead = true
 }
 
+func (f *fakeWithings) refreshWithoutTokens() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tokenless = true
+}
+
+// refuseTypes replaces the set of meastypes the API plan refuses; no args
+// lifts the restriction.
+func (f *fakeWithings) refuseTypes(types ...int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.refused = map[int]bool{}
+	for _, t := range types {
+		f.refused[t] = true
+	}
+}
+
 // blockMeasure makes the next getmeas calls hang until the returned func runs.
 func (f *fakeWithings) blockMeasure() func() {
 	f.mu.Lock()
@@ -156,7 +177,16 @@ func (f *fakeWithings) counts() (measure, token int) {
 func (f *fakeWithings) form() url.Values {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.lastForm
+	if len(f.forms) == 0 {
+		return nil
+	}
+	return f.forms[len(f.forms)-1]
+}
+
+func (f *fakeWithings) allForms() []url.Values {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]url.Values(nil), f.forms...)
 }
 
 func (f *fakeWithings) tokens() (access, refresh string) {
@@ -193,6 +223,10 @@ func (f *fakeWithings) handleToken(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"status": 401, "error": "invalid_grant"})
 		return
 	}
+	if f.tokenless {
+		writeJSON(w, 200, map[string]any{"status": 0, "body": map[string]any{"userid": f.userID, "expires_in": 10800}})
+		return
+	}
 
 	f.rotations++
 	f.access = fmt.Sprintf("w-access-%d", f.rotations)
@@ -212,7 +246,7 @@ func (f *fakeWithings) handleMeasure(w http.ResponseWriter, r *http.Request) {
 
 	f.mu.Lock()
 	f.measureCalls++
-	f.lastForm = r.PostForm
+	f.forms = append(f.forms, r.PostForm)
 	hold := f.hold
 	if f.probe != nil {
 		f.probes = append(f.probes, f.probe())
@@ -231,6 +265,14 @@ func (f *fakeWithings) handleMeasure(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"status": 401, "error": "invalid_token"})
 		return
 	}
+	for _, t := range requestedTypes(r.PostForm) {
+		if f.refused[t] {
+			f.mu.Unlock()
+			writeJSON(w, 200, map[string]any{"status": 277,
+				"error": "One of the data type requested in this API request is not available in your API plan"})
+			return
+		}
+	}
 
 	groups := f.selectGroups(r.PostForm)
 	cursor := f.updateTime
@@ -248,14 +290,33 @@ func (f *fakeWithings) handleMeasure(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"status": 0, "body": body})
 }
 
-// selectGroups honors either windowing mode; caller holds f.mu.
+// selectGroups honors either windowing mode and, like Withings, returns only
+// the requested meastypes; caller holds f.mu.
 func (f *fakeWithings) selectGroups(form url.Values) []withings.RawMeasureGroup {
+	want := map[int]bool{}
+	for _, t := range requestedTypes(form) {
+		want[t] = true
+	}
+	only := func(g withings.RawMeasureGroup) withings.RawMeasureGroup {
+		if len(want) == 0 {
+			return g
+		}
+		kept := g
+		kept.Measures = nil
+		for _, m := range g.Measures {
+			if want[m.Type] {
+				kept.Measures = append(kept.Measures, m)
+			}
+		}
+		return kept
+	}
+
 	out := []withings.RawMeasureGroup{}
 	if raw := form.Get("lastupdate"); raw != "" {
 		lastUpdate, _ := strconv.ParseInt(raw, 10, 64)
 		for _, g := range f.groups {
 			if g.updated > lastUpdate {
-				out = append(out, g.grp)
+				out = append(out, only(g.grp))
 			}
 		}
 		return out
@@ -264,10 +325,20 @@ func (f *fakeWithings) selectGroups(form url.Values) []withings.RawMeasureGroup 
 	end, _ := strconv.ParseInt(form.Get("enddate"), 10, 64)
 	for _, g := range f.groups {
 		if g.grp.Date >= start && (end == 0 || g.grp.Date <= end) {
-			out = append(out, g.grp)
+			out = append(out, only(g.grp))
 		}
 	}
 	return out
+}
+
+func requestedTypes(form url.Values) []int {
+	var types []int
+	for _, raw := range strings.Split(form.Get("meastypes"), ",") {
+		if t, err := strconv.Atoi(raw); err == nil {
+			types = append(types, t)
+		}
+	}
+	return types
 }
 
 // ── fake Garmin ──────────────────────────────────────────

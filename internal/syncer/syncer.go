@@ -35,6 +35,11 @@ const (
 	// maxRecentMerge mirrors the store's Recent cap: merging more only gives
 	// Save more to trim.
 	maxRecentMerge = 30
+
+	// advancedRetryAfter keeps fetches core-only for this long after Withings'
+	// API plan refused the advanced meastypes; each expiry costs one refused
+	// request.
+	advancedRetryAfter = 6 * time.Hour
 )
 
 // Status is the dashboard's view of the syncer, readable while a tick runs.
@@ -65,6 +70,11 @@ type Syncer struct {
 
 	// mu serializes all store access and all sync work.
 	mu sync.Mutex
+
+	// advancedRefusedAt is when Withings' API plan last refused visceral fat,
+	// BMR and metabolic age; zero while they are available. In memory only: a
+	// restart costs one extra refused request. Guarded by mu.
+	advancedRefusedAt time.Time
 
 	// stateMu guards everything below, so Status and Events never block on mu.
 	stateMu       sync.Mutex
@@ -333,41 +343,79 @@ func (s *Syncer) tick(ctx context.Context) {
 	s.record(start, errMsg, len(measurements), uploaded)
 }
 
-// fetch pulls everything new from Withings. A 401 mid-flight is worth exactly
-// one refresh + retry; a second means the fresh token is rejected too.
+// fetch pulls everything new from Withings, from the cursor when we have one.
+// LastUpdate == 0 should not happen (setup seeds it), so the fallback is a
+// conservative 7-day window ending at start, which becomes the next cursor.
 func (s *Syncer) fetch(ctx context.Context, start time.Time) ([]withings.Measurement, int64, error) {
+	c := s.withingsClient()
+	if cursor := s.st.State.Withings.LastUpdate; cursor != 0 {
+		return s.getMeasures(ctx, func(token string, types []int) ([]withings.Measurement, int64, error) {
+			return c.GetMeasuresSince(ctx, token, cursor, types)
+		})
+	}
+	from := start.Add(-fallbackWindow)
+	return s.getMeasures(ctx, func(token string, types []int) ([]withings.Measurement, int64, error) {
+		ms, err := c.GetMeasures(ctx, token, from, start, types)
+		return ms, start.Unix(), err
+	})
+}
+
+// measureFunc is one getmeas request over a cursor or window fixed by the
+// caller, so every call covers exactly the same weigh-ins.
+type measureFunc func(token string, types []int) ([]withings.Measurement, int64, error)
+
+// getMeasures fetches every meastype, or only the core ones while Withings' API
+// plan is known to refuse the rest. A new refusal is retried once with the core
+// types: the plan can cost visceral fat, BMR and metabolic age, never the
+// weigh-in. A plan refusal never refreshes a token or latches a reconnect.
+// Caller holds mu.
+func (s *Syncer) getMeasures(ctx context.Context, get measureFunc) ([]withings.Measurement, int64, error) {
 	token, err := s.withingsToken(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
-	ms, cursor, err := s.getMeasures(ctx, token, start)
-	if errors.Is(err, withings.ErrAuthExpired) {
-		if token, err = s.refreshWithings(ctx); err != nil {
-			return nil, 0, err
-		}
-		ms, cursor, err = s.getMeasures(ctx, token, start)
-		if errors.Is(err, withings.ErrAuthExpired) {
-			s.latchWithings("Withings rejected a freshly refreshed token")
-		}
+	if !s.advancedRefusedAt.IsZero() && time.Since(s.advancedRefusedAt) < advancedRetryAfter {
+		return s.getmeasWithRefresh(ctx, &token, get, withings.CoreTypes)
 	}
-	if err != nil {
-		return nil, 0, err
-	}
-	return ms, cursor, nil
-}
 
-// getMeasures uses the cursor when we have one. LastUpdate == 0 should not
-// happen (setup seeds it), so the fallback is a conservative 7-day window.
-func (s *Syncer) getMeasures(ctx context.Context, token string, start time.Time) ([]withings.Measurement, int64, error) {
-	c := s.withingsClient()
-	if s.st.State.Withings.LastUpdate == 0 {
-		ms, err := c.GetMeasures(ctx, token, start.Add(-fallbackWindow))
+	ms, cursor, err := s.getmeasWithRefresh(ctx, &token, get, withings.AllTypes)
+	if errors.Is(err, withings.ErrPlanRestricted) {
+		ms, cursor, err = s.getmeasWithRefresh(ctx, &token, get, withings.CoreTypes)
 		if err != nil {
 			return nil, 0, err
 		}
-		return ms, start.Unix(), nil
+		// Events only on a flip, never once per tick.
+		if s.advancedRefusedAt.IsZero() {
+			s.AddEvent("warn", "Withings' API plan refused visceral fat, basal metabolic rate and metabolic age — syncing weight and body composition only")
+		}
+		s.advancedRefusedAt = time.Now()
+		return ms, cursor, nil
 	}
-	return c.GetMeasuresSince(ctx, token, s.st.State.Withings.LastUpdate)
+	if err == nil && !s.advancedRefusedAt.IsZero() {
+		s.advancedRefusedAt = time.Time{}
+		s.AddEvent("info", "Withings' API plan allows visceral fat, basal metabolic rate and metabolic age again — syncing them too")
+	}
+	return ms, cursor, err
+}
+
+// getmeasWithRefresh runs one request. A 401 mid-flight is worth exactly one
+// refresh + retry; a second means the fresh token is rejected too. token is
+// updated in place, so a follow-up request reuses the refreshed one.
+func (s *Syncer) getmeasWithRefresh(ctx context.Context, token *string, get measureFunc, types []int) ([]withings.Measurement, int64, error) {
+	ms, cursor, err := get(*token, types)
+	if !errors.Is(err, withings.ErrAuthExpired) {
+		return ms, cursor, err
+	}
+	fresh, err := s.refreshWithings(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	*token = fresh
+	ms, cursor, err = get(fresh, types)
+	if errors.Is(err, withings.ErrAuthExpired) {
+		s.latchWithings("Withings rejected a freshly refreshed token")
+	}
+	return ms, cursor, err
 }
 
 // merge appends measurements we have neither uploaded nor queued, oldest
@@ -429,12 +477,12 @@ func (s *Syncer) uploadPending(ctx context.Context) (uploaded int, err error) {
 			uploaded++
 			s.save()
 		case garmin.WriteBadRequest:
-			// Garmin rejects this payload every time; retrying it forever
-			// would block every later measurement behind it.
+			// Garmin rejects this payload, or it can't be encoded at all, every
+			// time; retrying it forever would block every later measurement.
 			s.st.State.Pending = s.st.State.Pending[1:]
 			s.markRecent(m.GroupID, false, errText(werr))
 			s.save()
-			s.AddEvent("error", fmt.Sprintf("Garmin rejected the weigh-in from %s: %s",
+			s.AddEvent("error", fmt.Sprintf("Could not upload the weigh-in from %s: %s",
 				m.MeasuredAt.Format("2006-01-02 15:04"), errText(werr)))
 		default:
 			return uploaded, werr
@@ -444,13 +492,17 @@ func (s *Syncer) uploadPending(ctx context.Context) (uploaded int, err error) {
 }
 
 // uploadOne uploads a single measurement, applying the auth retry and the
-// in-tick transient backoff.
+// in-tick transient backoff. A measurement that can't be encoded is a bad
+// request: no retry will change it.
 func (s *Syncer) uploadOne(ctx context.Context, m store.Measurement) (garmin.WriteResult, error) {
+	fit, err := garmin.EncodeWeightFITs([]garmin.Measurement{toGarmin(m)})
+	if err != nil {
+		return garmin.WriteBadRequest, err
+	}
 	token, err := s.garminToken(ctx)
 	if err != nil {
 		return garmin.WriteAuthExpired, err
 	}
-	fit := garmin.EncodeWeightFITs([]garmin.Measurement{toGarmin(m)})
 
 	res, retryAfter, werr := garmin.WriteFIT(ctx, token, fit)
 	if res == garmin.WriteAuthExpired {
@@ -651,27 +703,32 @@ func toStore(m withings.Measurement) store.Measurement {
 		BodyFatPct:        m.BodyFatPct,
 		MuscleKG:          m.MuscleMassKG,
 		BoneKG:            m.BoneMassKG,
-		HydrationPct:      m.HydrationPct,
-		BMI:               m.BMI,
+		WaterMassKG:       m.WaterMassKG,
 		VisceralFat:       m.VisceralFat,
 		BMRKcal:           m.BMRKcal,
 		MetabolicAgeYears: m.MetabolicAgeYears,
 	}
 }
 
+// toGarmin derives hydration % from water mass and the weight of this same
+// weigh-in. BMI stays unset: Withings has no BMI meastype.
 func toGarmin(m store.Measurement) garmin.Measurement {
-	return garmin.Measurement{
+	g := garmin.Measurement{
 		MeasuredAt:        m.MeasuredAt,
 		WeightKG:          m.WeightKG,
 		BodyFatPct:        m.BodyFatPct,
 		MuscleKG:          m.MuscleKG,
 		BoneKG:            m.BoneKG,
-		HydrationPct:      m.HydrationPct,
-		BMI:               m.BMI,
 		VisceralFat:       m.VisceralFat,
 		BMRKcal:           m.BMRKcal,
 		MetabolicAgeYears: m.MetabolicAgeYears,
 	}
+	if m.WaterMassKG != nil {
+		if pct, ok := withings.HydrationPct(*m.WaterMassKG, m.WeightKG); ok {
+			g.HydrationPct = &pct
+		}
+	}
+	return g
 }
 
 func errText(err error) string {

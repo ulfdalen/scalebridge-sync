@@ -107,10 +107,14 @@ Req `{"range": "30d"|"1y"|"all"}` → `{"started": true}` | 409 `{"error": "alre
 ### GET /api/measurements?limit=50
 ```json
 {"items": [{"measured_at": "…", "weight_kg": 80.5, "body_fat_pct": 18.2, "muscle_kg": null,
-            "bone_kg": null, "hydration_pct": null, "bmi": 24.1,
+            "bone_kg": null, "hydration_pct": 60, "bmi": null,
             "visceral_fat": 8, "bmr_kcal": null, "metabolic_age_years": null,
             "synced": true, "sync_error": ""}]}
 ```
+`hydration_pct` is derived: Withings reports body water as a mass, so it is water kg ÷ `weight_kg` × 100
+of the same weigh-in, null unless 0 < water < weight. Before v0.0.4 it held the water mass in kg.
+`bmi` is deprecated and always null (Withings has no BMI measurement type); the key stays until a
+later minor release.
 
 ### GET /api/events?limit=20
 ```json

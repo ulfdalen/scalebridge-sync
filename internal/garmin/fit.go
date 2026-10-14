@@ -8,12 +8,13 @@ package garmin
 
 import (
 	"encoding/binary"
+	"errors"
 	"math"
 	"time"
 )
 
-// Measurement is one weigh-in. Nil optional fields are encoded as the FIT
-// "invalid" sentinel, which Garmin skips.
+// Measurement is one weigh-in. Nil optional fields, and values a field can't
+// represent, are encoded as the FIT "invalid" sentinel, which Garmin skips.
 type Measurement struct {
 	MeasuredAt        time.Time
 	WeightKG          float64  // required
@@ -41,6 +42,10 @@ const (
 	invUint16 = 0xFFFF
 	invUint8  = 0xFF
 
+	// The FIT weight type reserves 0xFFFE for "calculating" on top of the
+	// uint16 invalid value, so the largest real weight is 0xFFFD (655.33 kg).
+	maxWeight = 0xFFFD
+
 	msgFileID       = 0
 	msgWeightScale  = 30
 	fileTypeWeight  = 9    // file_id.type = weight_scale
@@ -49,23 +54,28 @@ const (
 )
 
 // EncodeWeightFIT encodes a single measurement.
-func EncodeWeightFIT(m Measurement) []byte {
+func EncodeWeightFIT(m Measurement) ([]byte, error) {
 	return EncodeWeightFITs([]Measurement{m})
 }
 
 // EncodeWeightFITs encodes every measurement into one file: the weight_scale
 // definition message is written once, then a data message each. Measurements
-// must be sorted by ascending MeasuredAt. Returns nil for an empty slice.
-func EncodeWeightFITs(ms []Measurement) []byte {
+// must be sorted by ascending MeasuredAt. Returns nil for an empty slice, and
+// an error when any measurement lacks an encodable weight or timestamp:
+// without them there is no record to upload.
+func EncodeWeightFITs(ms []Measurement) ([]byte, error) {
 	if len(ms) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	var body []byte
 	body = appendFileID(body, ms[0].MeasuredAt)
 	body = appendWeightScaleDef(body)
 	for _, m := range ms {
-		body = appendWeightScaleData(body, m)
+		var err error
+		if body, err = appendWeightScaleData(body, m); err != nil {
+			return nil, err
+		}
 	}
 
 	header := make([]byte, 14)
@@ -79,7 +89,7 @@ func EncodeWeightFITs(ms []Measurement) []byte {
 	out := make([]byte, 0, len(header)+len(body)+2)
 	out = append(out, header...)
 	out = append(out, body...)
-	return binary.LittleEndian.AppendUint16(out, fitCRC(out))
+	return binary.LittleEndian.AppendUint16(out, fitCRC(out)), nil
 }
 
 // ── file_id (global 0) ──────────────────────────────────
@@ -130,10 +140,21 @@ func appendWeightScaleDef(body []byte) []byte {
 }
 
 // Field order here must match the definition message above, byte for byte.
-func appendWeightScaleData(body []byte, m Measurement) []byte {
+func appendWeightScaleData(body []byte, m Measurement) ([]byte, error) {
+	weight, ok := scaled(m.WeightKG, 100, maxWeight)
+	if !ok {
+		return nil, errors.New("fit: weight outside the encodable range")
+	}
+	// FIT date_time counts seconds from 1989-12-31; values below 0x10000000
+	// mean "seconds since device power-on" and 0xFFFFFFFF is invalid, so a
+	// zero or pre-1998 time would otherwise wrap into a bogus date.
+	if ts := m.MeasuredAt.Unix() - fitEpoch; ts < 0x10000000 || ts >= 0xFFFFFFFF {
+		return nil, errors.New("fit: timestamp outside the encodable range")
+	}
+
 	body = append(body, 0x01) // data header, local 1
 	body = binary.LittleEndian.AppendUint32(body, toFITTime(m.MeasuredAt))
-	body = binary.LittleEndian.AppendUint16(body, scaled16(m.WeightKG, 100))
+	body = binary.LittleEndian.AppendUint16(body, uint16(weight))
 	body = appendScaled16(body, m.BodyFatPct, 100)
 	body = appendScaled16(body, m.HydrationPct, 100)
 	body = appendScaled16(body, m.BoneKG, 100)
@@ -142,46 +163,45 @@ func appendWeightScaleData(body []byte, m Measurement) []byte {
 	body = appendScaled8(body, m.MetabolicAgeYears, 1)
 	body = appendScaled8(body, m.VisceralFat, 1)
 	body = appendScaled16(body, m.BMI, 10)
-	return body
+	return body, nil
 }
 
 func toFITTime(t time.Time) uint32 {
 	return uint32(t.Unix() - fitEpoch)
 }
 
+// appendScaled16 and appendScaled8 apply a FIT scale factor (100 for kg and %,
+// 10 for BMI, 4 for basal_met, 1 for the one-byte ratings) and write the
+// invalid sentinel for a nil or unrepresentable value.
 func appendScaled16(b []byte, p *float64, scale float64) []byte {
-	if p == nil {
-		return binary.LittleEndian.AppendUint16(b, invUint16)
+	if p != nil {
+		if n, ok := scaled(*p, scale, invUint16-1); ok {
+			return binary.LittleEndian.AppendUint16(b, uint16(n))
+		}
 	}
-	return binary.LittleEndian.AppendUint16(b, scaled16(*p, scale))
+	return binary.LittleEndian.AppendUint16(b, invUint16)
 }
 
 func appendScaled8(b []byte, p *float64, scale float64) []byte {
-	if p == nil {
-		return append(b, invUint8)
+	if p != nil {
+		if n, ok := scaled(*p, scale, invUint8-1); ok {
+			return append(b, uint8(n))
+		}
 	}
-	return append(b, scaled8(*p, scale))
+	return append(b, invUint8)
 }
 
-// scaled16 applies a FIT scale factor (100 for kg and %, 10 for BMI, 4 for
-// basal_met); scaled8 does the same for the one-byte ratings, which are scale 1.
-func scaled16(v, scale float64) uint16 { return uint16(clampScaled(v, scale, invUint16-1)) }
-
-func scaled8(v, scale float64) uint8 { return uint8(clampScaled(v, scale, invUint8-1)) }
-
-// clampScaled rounds v×scale — truncating shaves up to 10 g off a weigh-in —
-// and pins it to [0, max]. max stops one short of the invalid sentinel, since
-// wrapping would yield a plausible wrong weight and landing on the sentinel
-// itself would read as "missing".
-func clampScaled(v, scale, max float64) float64 {
+// scaled rounds v×scale — truncating shaves up to 10 g off a weigh-in — and
+// reports ok=false unless the result is in [1, max]: NaN, zero, negative and
+// overflowing values are omitted, never clamped or zeroed, because a clamped
+// number lands in Garmin Connect as a plausible reading nobody measured. max
+// stops short of the field's invalid sentinel, which would read as "missing".
+func scaled(v, scale, max float64) (float64, bool) {
 	n := math.Round(v * scale)
-	if !(n > 0) { // also catches NaN
-		return 0
+	if !(n >= 1) || n > max { // !(n >= 1) also catches NaN
+		return 0, false
 	}
-	if n > max {
-		return max
-	}
-	return n
+	return n, true
 }
 
 // ── CRC-16 (FIT variant) ────────────────────────────────

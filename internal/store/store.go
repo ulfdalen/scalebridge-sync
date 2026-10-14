@@ -73,6 +73,9 @@ type Garmin struct {
 	ReconnectRequired bool      `json:"reconnect_required"`
 }
 
+// Measurement is one weigh-in. Files written before v0.0.4 also carry
+// hydration_pct, which held kilograms, and bmi: both are left unread, so the
+// next Save drops them and they can never be uploaded.
 type Measurement struct {
 	GroupID           int64     `json:"grpid"`
 	MeasuredAt        time.Time `json:"measured_at"`
@@ -80,8 +83,7 @@ type Measurement struct {
 	BodyFatPct        *float64  `json:"body_fat_pct,omitempty"`
 	MuscleKG          *float64  `json:"muscle_kg,omitempty"`
 	BoneKG            *float64  `json:"bone_kg,omitempty"`
-	HydrationPct      *float64  `json:"hydration_pct,omitempty"`
-	BMI               *float64  `json:"bmi,omitempty"`
+	WaterMassKG       *float64  `json:"water_mass_kg,omitempty"`
 	VisceralFat       *float64  `json:"visceral_fat,omitempty"`
 	BMRKcal           *float64  `json:"bmr_kcal,omitempty"`
 	MetabolicAgeYears *float64  `json:"metabolic_age_years,omitempty"`
