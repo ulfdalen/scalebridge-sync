@@ -24,8 +24,8 @@ const maxBody = 1 << 20
 const csrfHeader = "X-ScaleBridge-Local"
 
 // The DNS-rebinding defense: an attacker's domain resolving to 127.0.0.1 still
-// arrives with its own Host header. With --public-url the proxy's origin is the
-// one other name accepted, so the proxy has to forward Host unchanged.
+// arrives with its own Host header. With --public-url the public hostname is the
+// one other name accepted, so the proxy has to forward a Host that carries it.
 func (s *Server) hostAllowlist(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.allowedHost(r.Host) {
@@ -37,7 +37,22 @@ func (s *Server) hostAllowlist(next http.Handler) http.Handler {
 }
 
 func (s *Server) allowedHost(host string) bool {
-	return s.localHost(host) || s.publicHost(host)
+	return s.localHost(host) || s.publicHost(host) || s.publicName(host)
+}
+
+// publicName matches the bare --public-url hostname. A proxy that rewrites Host
+// from the request's name (nginx's $host, and so Nginx Proxy Manager) drops a
+// non-default port, and the rebinding defense only needs the name. The Origin
+// check still demands the port.
+func (s *Server) publicName(host string) bool {
+	if s.public == nil {
+		return false
+	}
+	name := s.public.Hostname()
+	if strings.Contains(name, ":") {
+		name = "[" + name + "]"
+	}
+	return asciiEqualFold(host, name)
 }
 
 func (s *Server) localHost(host string) bool {

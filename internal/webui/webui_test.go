@@ -198,9 +198,18 @@ func TestPublicURLHostAllowlist(t *testing.T) {
 		}
 	}
 
-	// An explicit non-default port has to be sent as-is.
+	// A non-default port may be dropped, as nginx's $host does, but not replaced.
 	h = newHarnessWith(t, mustURL(t, "http://nas.local:8080"))
-	for host, want := range map[string]int{"nas.local:8080": 200, "nas.local": 403, "nas.local:80": 403} {
+	for host, want := range map[string]int{
+		"nas.local:8080": 200,
+		"nas.local":      200,
+		"NAS.local":      200,
+		"nas.local:80":   403,
+		"nas.local:9090": 403,
+		"nas.local.":     403,
+		"[nas.local]":    403,
+		"nas.local]":     403,
+	} {
 		r := h.req(http.MethodGet, "/api/status", nil)
 		r.Host = host
 		if rec := h.do(r); rec.Code != want {
@@ -210,11 +219,31 @@ func TestPublicURLHostAllowlist(t *testing.T) {
 
 	// IPv6 literals keep their brackets in Host but not in url.Hostname().
 	h = newHarnessWith(t, mustURL(t, "https://[::1]:8443"))
-	for host, want := range map[string]int{"[::1]:8443": 200, "[::1]": 403, "[::1]:443": 403} {
+	for host, want := range map[string]int{"[::1]:8443": 200, "[::1]": 200, "[::1]:443": 403, "::1": 403, "[[::1]]": 403} {
 		r := h.req(http.MethodGet, "/api/status", nil)
 		r.Host = host
 		if rec := h.do(r); rec.Code != want {
 			t.Fatalf("GET /api/status with Host %q: status %d, want %d", host, rec.Code, want)
+		}
+	}
+}
+
+// Behind a proxy on a non-default port that forwards Host without the port
+// (Nginx Proxy Manager), the browser's Origin still carries it and must match.
+func TestPublicURLPortDroppedByProxy(t *testing.T) {
+	h := newHarnessWith(t, mustURL(t, "https://scale.example.com:8443"))
+
+	for origin, want := range map[string]int{
+		"https://scale.example.com:8443": http.StatusOK,
+		"https://scale.example.com":      http.StatusForbidden, // port 443 is another origin
+		"http://scale.example.com:8443":  http.StatusForbidden,
+		"https://evil.example.com:8443":  http.StatusForbidden,
+	} {
+		r := h.req(http.MethodPost, "/api/withings/disconnect", map[string]any{})
+		r.Host = "scale.example.com"
+		r.Header.Set("Origin", origin)
+		if rec := h.do(r); rec.Code != want {
+			t.Fatalf("POST with Host scale.example.com, Origin %q: status %d, want %d", origin, rec.Code, want)
 		}
 	}
 }

@@ -11,10 +11,11 @@ static UI (`static/*.js`) and the Go handlers must both match it exactly.
 - CSRF: every non-GET request MUST carry header `X-ScaleBridge-Local: 1`; requests with a
   body MUST be `Content-Type: application/json`. Otherwise 403 `{"error":"csrf"}`.
 - Host header must be `localhost:<port>`, `127.0.0.1:<port>` or `[::1]:<port>` — or, with
-  `--public-url`, that URL's host with its explicit port (none when it is the scheme default) —
-  else 403 `{"error":"forbidden_host"}`. The Origin check on non-GET requests accepts
+  `--public-url`, that URL's host with its explicit port (none when it is the scheme default)
+  or with no port at all (proxies using nginx's `$host` drop it) — else 403
+  `{"error":"forbidden_host"}`. The Origin check on non-GET requests accepts
   `http://<local name>:<port>` and, with `--public-url`, exactly that origin: same scheme, same
-  host and port rule.
+  host, and the URL's explicit port (none when it is the scheme default).
 - Timestamps are RFC3339 strings; absent/never values are `null`.
 
 ## Pages
